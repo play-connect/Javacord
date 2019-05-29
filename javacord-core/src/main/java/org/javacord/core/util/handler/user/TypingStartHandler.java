@@ -27,7 +27,7 @@ public class TypingStartHandler extends PacketHandler {
 
     @Override
     public void handle(JsonNode packet) {
-        long userId = packet.get("user_id").asLong();
+     /*   long userId = packet.get("user_id").asLong();
         long channelId = packet.get("channel_id").asLong();
         api.getTextChannelById(channelId).ifPresent(channel -> api.getCachedUserById(userId).ifPresent(user -> {
             UserStartTypingEvent event = new UserStartTypingEventImpl(user, channel);
@@ -39,7 +39,7 @@ public class TypingStartHandler extends PacketHandler {
                     channel,
                     user,
                     event);
-        }));
+        })); */
     }
 
 }
