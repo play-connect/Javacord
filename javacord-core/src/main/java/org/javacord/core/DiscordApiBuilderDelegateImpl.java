@@ -347,7 +347,8 @@ public class DiscordApiBuilderDelegateImpl implements DiscordApiBuilderDelegate 
     }
 
     private void setRecommendedTotalShards(CompletableFuture<Void> future) {
-        DiscordApiImpl api = new DiscordApiImpl(token, globalRatelimiter, proxySelector, proxy, proxyAuthenticator, trustAllCertificates);
+        DiscordApiImpl api = new DiscordApiImpl(
+                token, globalRatelimiter, proxySelector, proxy, proxyAuthenticator, trustAllCertificates);
         RestRequest<JsonNode> botGatewayRequest = new RestRequest<>(api, RestMethod.GET, RestEndpoint.GATEWAY_BOT);
         botGatewayRequest
                 .execute(RestRequestResult::getJsonBody)

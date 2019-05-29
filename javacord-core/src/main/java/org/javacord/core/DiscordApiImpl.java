@@ -333,8 +333,8 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      *                             it.
      * @param trustAllCertificates Whether to trust all SSL certificates.
      */
-    public DiscordApiImpl(String token, Ratelimiter globalRatelimiter, ProxySelector proxySelector, Proxy proxy, Authenticator proxyAuthenticator,
-                          boolean trustAllCertificates) {
+    public DiscordApiImpl(String token, Ratelimiter globalRatelimiter, ProxySelector proxySelector, Proxy proxy,
+                          Authenticator proxyAuthenticator, boolean trustAllCertificates) {
         this(AccountType.BOT, token, 0, 1, false, globalRatelimiter,
                 proxySelector, proxy, proxyAuthenticator, trustAllCertificates, null);
     }

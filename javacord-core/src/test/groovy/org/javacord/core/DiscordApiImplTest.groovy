@@ -22,7 +22,7 @@ import java.util.concurrent.CompletionException
 class DiscordApiImplTest extends Specification {
 
     @Subject
-    def api = new DiscordApiImpl(null, null, null, null, false)
+    def api = new DiscordApiImpl(null, null, null, null, null, false)
 
     def 'getAllServers returns all servers'() {
         given:
@@ -320,7 +320,7 @@ class DiscordApiImplTest extends Specification {
             MockProxyManager.setSocks4SystemProperties()
 
         and:
-            def api = new DiscordApiImpl(AccountType.BOT, 'fakeBotToken', null, 0, 1, false, null, null, null, true,
+            def api = new DiscordApiImpl(AccountType.BOT, 'fakeBotToken', 0, 1, false, null, null, null, null, true,
                     null, { [InetAddress.getLoopbackAddress()] })
 
         when:
