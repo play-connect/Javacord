@@ -262,6 +262,10 @@ public class RoleImpl implements Role, InternalRoleAttachableListenerManager {
 
     @Override
     public boolean hasUser(User u) {
+        if (isEveryoneRole()) {
+            return true;
+        }
+
         userHashSetLock.readLock().lock();
         try {
             return users.contains(u);
