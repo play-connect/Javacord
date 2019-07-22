@@ -477,6 +477,9 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 )
                 .proxyAuthenticator(new ProxyAuthenticator(proxyAuthenticator))
                 .proxy(proxy);
+        httpClientBuilder.connectTimeout(60 * 60, TimeUnit.SECONDS);
+        httpClientBuilder.readTimeout(60 * 60, TimeUnit.SECONDS);
+        httpClientBuilder.writeTimeout(60 * 60, TimeUnit.SECONDS);
         if (proxySelector != null) {
             httpClientBuilder.proxySelector(proxySelector);
         }
