@@ -178,8 +178,7 @@ public class RatelimitManager {
 
             if (global) {
                 // We hit a global ratelimit. Time to panic!
-                logger.warn("Hit a global ratelimit! This means you were sending a very large "
-                        + "amount within a very short time frame.");
+                logger.warn("Hit a global ratelimit! Retry after is " + retryAfter);
                 RatelimitBucket.setGlobalRatelimitResetTimestamp(api, responseTimestamp + retryAfter);
             } else {
                 logger.debug("Received a 429 response from Discord! Recalculating time offset...");

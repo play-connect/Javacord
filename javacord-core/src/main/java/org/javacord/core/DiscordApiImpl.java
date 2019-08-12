@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.Dns;
 import okhttp3.OkHttpClient;
+import okhttp3.Response;
 import okhttp3.logging.HttpLoggingInterceptor;
 import okhttp3.logging.HttpLoggingInterceptor.Level;
 import org.apache.logging.log4j.Logger;
@@ -475,6 +476,17 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 .addInterceptor(
                         new HttpLoggingInterceptor(LoggerUtil.getLogger(OkHttpClient.class)::trace).setLevel(Level.BODY)
                 )
+                .addNetworkInterceptor(chain -> {
+                    getGlobalRatelimiter().ifPresent(ratelimiter -> {
+                        try {
+                            ratelimiter.requestQuota();
+                        } catch (InterruptedException e) {
+                            logger.warn("Encountered unexpected ratelimiter interrupt", e);
+                        }
+                    });
+                    Response response = chain.proceed(chain.request());
+                    return response;
+                })
                 .proxyAuthenticator(new ProxyAuthenticator(proxyAuthenticator))
                 .proxy(proxy);
         httpClientBuilder.connectTimeout(60 * 60, TimeUnit.SECONDS);
@@ -493,6 +505,9 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
             httpClientBuilder.sslSocketFactory(trustManager.createSslSocketFactory(), trustManager);
         }
         this.httpClient = httpClientBuilder.build();
+        httpClient.dispatcher().setMaxRequestsPerHost(200);
+        httpClient.dispatcher().setMaxRequests(200);
+
         this.eventDispatcher = new EventDispatcher(this);
 
         if (ready != null) {

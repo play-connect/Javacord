@@ -5,7 +5,7 @@ package org.javacord.api.util.ratelimit;
  */
 public class LocalRatelimiter implements Ratelimiter {
 
-    private volatile long nextResetNanos;
+    private volatile long nextResetMillis;
     private volatile int remainingQuota;
 
     private final int amount;
@@ -47,8 +47,8 @@ public class LocalRatelimiter implements Ratelimiter {
      *
      * @return The next time the quota resets. Can be in the past.
      */
-    public long getNextResetNanos() {
-        return nextResetNanos;
+    public long getNextResetMillis() {
+        return nextResetMillis;
     }
 
     /**
@@ -66,20 +66,20 @@ public class LocalRatelimiter implements Ratelimiter {
             // Wait until a new quota becomes available
             long sleepTime;
             while ((sleepTime = calculateSleepTime()) > 0) { // Sleep is unreliable, so we have to loop
-                Thread.sleep(sleepTime);
+                Thread.sleep(sleepTime + 5);
             }
         }
 
         // Reset the limit when the last reset timestamp is past
-        if (System.nanoTime() > nextResetNanos) {
+        if (System.currentTimeMillis() > nextResetMillis) {
             remainingQuota = amount;
-            nextResetNanos = System.nanoTime() + seconds * 1_000_000_000L;
+            nextResetMillis = System.currentTimeMillis() + seconds * 1_000L;
         }
 
         remainingQuota--;
     }
 
     private long calculateSleepTime() {
-        return (nextResetNanos - System.nanoTime()) / 1_000_000;
+        return (nextResetMillis - System.currentTimeMillis());
     }
 }
