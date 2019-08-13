@@ -196,7 +196,7 @@ public class RatelimitManager {
                 requestResult.complete(result);
             }
 
-            // Update bucket information
+            // Update bucket informations
             bucket.setRatelimitRemaining(remaining);
             bucket.setRatelimitResetTimestamp(reset);
         }
