@@ -13,6 +13,7 @@ import org.javacord.api.Javacord;
 import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.audio.AudioConnectionImpl;
 import org.javacord.core.entity.server.ServerImpl;
+import org.javacord.core.util.http.TrustAllTrustManager;
 import org.javacord.core.util.logging.LoggerUtil;
 import org.javacord.core.util.logging.WebSocketLogger;
 
@@ -240,6 +241,9 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
             factory.setSSLContext(SSLContext.getDefault());
         } catch (NoSuchAlgorithmException e) {
             logger.warn("An error occurred while setting ssl context", e);
+        }
+        if (api.isTrustAllCertificates()) {
+            factory.setSSLSocketFactory(new TrustAllTrustManager().createSslSocketFactory());
         }
         try {
             WebSocket websocket = factory
