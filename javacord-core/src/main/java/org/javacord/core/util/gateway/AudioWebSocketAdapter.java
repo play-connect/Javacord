@@ -79,7 +79,7 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
                 heartbeatFrame -> websocket.get().sendFrame(heartbeatFrame),
                 (code, reason) -> websocket.get().sendClose(code, reason),
                 true);
-        connect();
+        api.getThreadPool().getExecutorService().submit(this::connect);
     }
 
     @Override
