@@ -489,9 +489,9 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 })
                 .proxyAuthenticator(new ProxyAuthenticator(proxyAuthenticator))
                 .proxy(proxy);
-        httpClientBuilder.connectTimeout(60 * 60, TimeUnit.SECONDS);
-        httpClientBuilder.readTimeout(60 * 60, TimeUnit.SECONDS);
-        httpClientBuilder.writeTimeout(60 * 60, TimeUnit.SECONDS);
+        httpClientBuilder.connectTimeout(15 * 60, TimeUnit.SECONDS);
+        httpClientBuilder.readTimeout(15 * 60, TimeUnit.SECONDS);
+        httpClientBuilder.writeTimeout(15 * 60, TimeUnit.SECONDS);
         if (proxySelector != null) {
             httpClientBuilder.proxySelector(proxySelector);
         }
@@ -505,8 +505,8 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
             httpClientBuilder.sslSocketFactory(trustManager.createSslSocketFactory(), trustManager);
         }
         this.httpClient = httpClientBuilder.build();
-        httpClient.dispatcher().setMaxRequestsPerHost(200);
-        httpClient.dispatcher().setMaxRequests(200);
+        httpClient.dispatcher().setMaxRequestsPerHost(1000);
+        httpClient.dispatcher().setMaxRequests(1000);
 
         this.eventDispatcher = new EventDispatcher(this);
 
