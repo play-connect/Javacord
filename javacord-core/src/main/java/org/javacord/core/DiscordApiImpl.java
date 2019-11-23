@@ -1418,9 +1418,10 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
     @Override
     public MessageSet getCachedMessages() {
         synchronized (messages) {
-            return messages.values().stream()
+            return new MessageSetImpl(messages.values().stream()
                     .map(Reference::get)
-                    .filter(Objects::nonNull).collect(Collectors.toCollection(MessageSetImpl::new));
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList()));
         }
     }
 
@@ -1432,11 +1433,11 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      */
     public MessageSet getCachedMessagesWhere(Predicate<Message> filter) {
         synchronized (messages) {
-            return messages.values().stream()
+            return new MessageSetImpl(messages.values().stream()
                     .map(Reference::get)
                     .filter(Objects::nonNull)
                     .filter(filter)
-                    .collect(Collectors.toCollection(MessageSetImpl::new));
+                    .collect(Collectors.toList()));
         }
     }
 
