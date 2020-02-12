@@ -61,7 +61,7 @@ public class LocalRatelimiter implements Ratelimiter {
     }
 
     @Override
-    public synchronized void requestQuota(String path) throws InterruptedException {
+    public synchronized void requestQuota() throws InterruptedException {
         if (remainingQuota <= 0) {
             // Wait until a new quota becomes available
             long sleepTime;

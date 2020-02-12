@@ -484,8 +484,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                             logger.warn("Encountered unexpected ratelimiter interrupt", e);
                         }
                     });
-                    Response response = chain.proceed(chain.request());
-                    return response;
+                    return chain.proceed(chain.request());
                 })
                 .proxyAuthenticator(new ProxyAuthenticator(proxyAuthenticator))
                 .proxy(proxy);
