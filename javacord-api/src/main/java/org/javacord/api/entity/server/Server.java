@@ -6,6 +6,7 @@ import org.javacord.api.entity.Icon;
 import org.javacord.api.entity.Nameable;
 import org.javacord.api.entity.Region;
 import org.javacord.api.entity.UpdatableFromCache;
+import org.javacord.api.entity.VanityUrlCode;
 import org.javacord.api.entity.auditlog.AuditLog;
 import org.javacord.api.entity.auditlog.AuditLogActionType;
 import org.javacord.api.entity.auditlog.AuditLogEntry;
@@ -41,6 +42,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -56,6 +58,99 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      * @return The audio connection in this server.
      */
     Optional<AudioConnection> getAudioConnection();
+
+    /**
+     * Checks if the server has boost messages enabled.
+     *
+     * @return Whether the the server has boost messages enabled or not.
+     */
+    boolean hasBoostMessagesEnabled();
+
+    /**
+     * Checks if the server has join messages enabled.
+     *
+     * @return Whether the the server has join messages enabled or not.
+     */
+    boolean hasJoinMessagesEnabled();
+
+    /**
+     * Gets the features of the server.
+     *
+     * @return The server's available features.
+     */
+    Collection<ServerFeature> getFeatures();
+
+    /**
+     * Gets the boost level of the server.
+     *
+     * @return The boost level.
+     */
+    BoostLevel getBoostLevel();
+
+    /**
+     * Gets the boost count of the server.
+     *
+     * @return The boost count.
+     */
+    int getBoostCount();
+
+    /**
+     * Gets the rules channel.
+     *
+     * <p>Rule channels are only available for public servers.
+     * You can check if a server is public using the {@link #getFeatures()} methods.
+     *
+     * @return The rules channel.
+     */
+    Optional<ServerTextChannel> getRulesChannel();
+
+    /**
+     * Gets the description of the server.
+     *
+     * @return The description.
+     */
+    Optional<String> getDescription();
+
+    /**
+     * Gets the moderators-only channel (sometimes also called "public updates channel").
+     *
+     * <p>This is the channel where Discord will send announcements and updates relevant
+     * to Public server admins and moderators, like new moderation features and the
+     * server's eligibility in Discovery.
+     *
+     * <p>Moderator-only channels are only available for public servers.
+     * You can check if a server is public using the {@link #getFeatures()} method.
+     *
+     * @return The moderators-only channel.
+     */
+    Optional<ServerTextChannel> getModeratorsOnlyChannel();
+
+    /**
+     * Gets the vanity url code of the server.
+     *
+     * @return The vanity url code.
+     */
+    Optional<VanityUrlCode> getVanityUrlCode();
+
+    /**
+     * Gets the discovery splash of the server.
+     *
+     * @return The discovery splash.
+     */
+    Optional<Icon> getDiscoverySplash();
+
+    /**
+     * Gets the server's preferred locale.
+     *
+     * <p>Discord will prioritize this server in Discovery to users who speak
+     * the selected language. Updates sent from Discord in the Moderators-only
+     * channel will also be in this language.
+     *
+     * <p>Setting a preferred locale is only available for public servers.
+     * You can check if a server is public using the {@link #getFeatures()} methods.
+     * @return The sever's preferred locale.
+     */
+    Locale getPreferredLocale();
 
     /**
      * Gets the region of the server.
@@ -348,7 +443,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<User> getMemberById(String id) {
         try {
-            return getMemberById(Long.valueOf(id));
+            return getMemberById(Long.parseLong(id));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
@@ -363,7 +458,9 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<User> getMemberByDiscriminatedName(String discriminatedName) {
         String[] nameAndDiscriminator = discriminatedName.split("#", 2);
-        return getMemberByNameAndDiscriminator(nameAndDiscriminator[0], nameAndDiscriminator[1]);
+        return (nameAndDiscriminator.length > 1)
+            ? getMemberByNameAndDiscriminator(nameAndDiscriminator[0], nameAndDiscriminator[1])
+            : Optional.empty();
     }
 
     /**
@@ -375,7 +472,9 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<User> getMemberByDiscriminatedNameIgnoreCase(String discriminatedName) {
         String[] nameAndDiscriminator = discriminatedName.split("#", 2);
-        return getMemberByNameAndDiscriminatorIgnoreCase(nameAndDiscriminator[0], nameAndDiscriminator[1]);
+        return (nameAndDiscriminator.length > 1)
+            ? getMemberByNameAndDiscriminatorIgnoreCase(nameAndDiscriminator[0], nameAndDiscriminator[1])
+            : Optional.empty();
     }
 
     /**
@@ -586,7 +685,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     default Optional<Color> getRoleColor(User user) {
         return user.getRoles(this).stream()
                    .filter(role -> role.getColor().isPresent())
-                   .max(Comparator.comparingInt(Role::getPosition))
+                   .max(Comparator.comparingInt(Role::getRawPosition))
                    .flatMap(Role::getColor);
     }
 
@@ -934,7 +1033,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      * This method assumes the file type is "png"!
      *
      * <p>If you want to update several settings at once, it's recommended to use the
@@ -948,7 +1047,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -962,7 +1061,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -975,7 +1074,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -988,7 +1087,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -1001,7 +1100,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      * This method assumes the file type is "png"!
      *
      * <p>If you want to update several settings at once, it's recommended to use the
@@ -1015,7 +1114,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -1029,7 +1128,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      * This method assumes the file type is "png"!
      *
      * <p>If you want to update several settings at once, it's recommended to use the
@@ -1043,7 +1142,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Updates the splash of the server.
+     * Updates the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -1057,7 +1156,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
     }
 
     /**
-     * Removes the splash of the server.
+     * Removes the splash of the server. Requires {@link ServerFeature#INVITE_SPLASH}.
      *
      * <p>If you want to update several settings at once, it's recommended to use the
      * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
@@ -1066,6 +1165,205 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default CompletableFuture<Void> removeSplash() {
         return createUpdater().removeSplash().update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     * This method assumes the file type is "png"!
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(BufferedImage banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @param fileType The type of the banner, e.g. "png" or "jpg".
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(BufferedImage banner, String fileType) {
+        return createUpdater().setBanner(banner, fileType).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server. Requires {@link ServerFeature#BANNER}.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(File banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(Icon banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(URL banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     * This method assumes the file type is "png"!
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(byte[] banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @param fileType The type of the banner, e.g. "png" or "jpg".
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(byte[] banner, String fileType) {
+        return createUpdater().setBanner(banner, fileType).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     * This method assumes the file type is "png"!
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(InputStream banner) {
+        return createUpdater().setBanner(banner).update();
+    }
+
+    /**
+     * Updates the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param banner The new banner of the server.
+     * @param fileType The type of the banner, e.g. "png" or "jpg".
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updateBanner(InputStream banner, String fileType) {
+        return createUpdater().setBanner(banner, fileType).update();
+    }
+
+    /**
+     * Removes the banner of the server. Requires {@link ServerFeature#BANNER}.
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @return A future to check if the removal was successful.
+     */
+    default CompletableFuture<Void> removeBanner() {
+        return createUpdater().removeBanner().update();
+    }
+
+    /**
+     * Updates the rules channel of the server. Server has to be "PUBLIC".
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param rulesChannel The new rules channel of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> setRulesChannel(ServerTextChannel rulesChannel) {
+        return createUpdater().setRulesChannel(rulesChannel).update();
+    }
+
+    /**
+     * Removes the rules channel of the server. Server has to be "PUBLIC".
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> removeRulesChannel() {
+        return createUpdater().removeRulesChannel().update();
+    }
+
+
+    /**
+     * Updates the moderators-only channel of the server. Server has to be "PUBLIC".
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param moderatorsOnlyChannel The new moderators-only of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> setModeratorsOnlyChannel(ServerTextChannel moderatorsOnlyChannel) {
+        return createUpdater().setModeratorsOnlyChannel(moderatorsOnlyChannel).update();
+    }
+
+    /**
+     * Removes the moderators-only channel of the server. Server has to be "PUBLIC".
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> removeModeratorsOnlyChannel() {
+        return createUpdater().removeModeratorsOnlyChannel().update();
+    }
+
+    /**
+     * Updates the locale of the server. Server has to be "PUBLIC".
+     *
+     * <p>If you want to update several settings at once, it's recommended to use the
+     * {@link ServerUpdater} from {@link #createUpdater()} which provides a better performance!
+     *
+     * @param locale The new locale of the server.
+     * @return A future to check if the update was successful.
+     */
+    default CompletableFuture<Void> updatePreferredLocale(Locale locale) {
+        return createUpdater().setPreferredLocale(locale).update();
     }
 
     /**
@@ -1794,7 +2092,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<ServerChannel> getChannelById(String id) {
         try {
-            return getChannelById(Long.valueOf(id));
+            return getChannelById(Long.parseLong(id));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
@@ -1848,7 +2146,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<ChannelCategory> getChannelCategoryById(String id) {
         try {
-            return getChannelCategoryById(Long.valueOf(id));
+            return getChannelCategoryById(Long.parseLong(id));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
@@ -1902,7 +2200,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<ServerTextChannel> getTextChannelById(String id) {
         try {
-            return getTextChannelById(Long.valueOf(id));
+            return getTextChannelById(Long.parseLong(id));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
@@ -1956,7 +2254,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      */
     default Optional<ServerVoiceChannel> getVoiceChannelById(String id) {
         try {
-            return getVoiceChannelById(Long.valueOf(id));
+            return getVoiceChannelById(Long.parseLong(id));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
@@ -2269,9 +2567,10 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
      * @return Whether the user can manage the role.
      */
     default boolean canManageRole(User user, Role target) {
-        return canManageRoles(user)
-                && getRoles().contains(target)
-                && getHighestRole(user).orElseGet(this::getEveryoneRole).compareTo(target) >= 0;
+        return target.getServer() == this
+                && (isOwner(user)
+                || (canManageRoles(user)
+                && getHighestRole(user).orElseGet(this::getEveryoneRole).compareTo(target) >= 0));
     }
 
     /**

@@ -3,6 +3,7 @@ package org.javacord.core.entity.webhook;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.logging.log4j.Logger;
 import org.javacord.api.DiscordApi;
+import org.javacord.api.Javacord;
 import org.javacord.api.entity.DiscordEntity;
 import org.javacord.api.entity.Icon;
 import org.javacord.api.entity.channel.TextChannel;
@@ -11,6 +12,7 @@ import org.javacord.api.entity.user.User;
 import org.javacord.api.entity.webhook.Webhook;
 import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.entity.IconImpl;
+import org.javacord.core.listener.webhook.InternalWebhookAttachableListenerManager;
 import org.javacord.core.util.logging.LoggerUtil;
 import org.javacord.core.util.rest.RestEndpoint;
 import org.javacord.core.util.rest.RestMethod;
@@ -25,7 +27,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * The implementation of {@link Webhook}.
  */
-public class WebhookImpl implements Webhook {
+public class WebhookImpl implements Webhook, InternalWebhookAttachableListenerManager {
 
     /**
      * The logger of this class.
@@ -103,7 +105,7 @@ public class WebhookImpl implements Webhook {
     @Override
     public Optional<Icon> getAvatar() {
         if (avatarId != null) {
-            String url = "https://cdn.discordapp.com/avatars/" + getIdAsString() + "/" + avatarId
+            String url = "https://" + Javacord.DISCORD_CDN_DOMAIN + "/avatars/" + getIdAsString() + "/" + avatarId
                     + (avatarId.startsWith("a_") ? ".gif" : ".png");
             try {
                 return Optional.of(new IconImpl(getApi(), new URL(url)));

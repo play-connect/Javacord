@@ -6,10 +6,12 @@ import org.javacord.api.entity.DiscordEntity;
 import org.javacord.api.entity.Icon;
 import org.javacord.api.entity.Nameable;
 import org.javacord.api.entity.channel.Categorizable;
+import org.javacord.api.entity.channel.ServerVoiceChannel;
 import org.javacord.api.entity.server.Server;
 import org.javacord.api.entity.user.User;
 import org.javacord.api.entity.webhook.Webhook;
 
+import java.awt.Color;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -64,6 +66,16 @@ public interface MessageAuthor extends DiscordEntity, Nameable {
      * @return The avatar of the author.
      */
     Icon getAvatar();
+
+    /**
+     * Gets the voice channel this MessageAuthor (if it is an User)
+     * is connected to on the server where the message has been sent.
+     *
+     * @return The server voice channel the MessageAuthor is connected to.
+     */
+    default Optional<ServerVoiceChannel> getConnectedVoiceChannel() {
+        return getMessage().getServer().flatMap(server -> server.getConnectedVoiceChannel(getId()));
+    }
 
     /**
      * Checks if the author of the message is a user.
@@ -555,6 +567,17 @@ public interface MessageAuthor extends DiscordEntity, Nameable {
         return asUser()
                 .map(getMessage()::canDelete)
                 .orElse(false);
+    }
+
+    /**
+     * Gets the displayed color if the author was a User on a Server.
+     *
+     * @return The display color, if applicable.
+     */
+    default Optional<Color> getRoleColor() {
+        return getMessage()
+                .getServer()
+                .flatMap(server -> asUser().flatMap(server::getRoleColor));
     }
 
     /**

@@ -18,6 +18,7 @@ import org.javacord.api.entity.emoji.internal.CustomEmojiBuilderDelegate;
 import org.javacord.api.entity.emoji.internal.CustomEmojiUpdaterDelegate;
 import org.javacord.api.entity.message.embed.internal.EmbedBuilderDelegate;
 import org.javacord.api.entity.message.internal.MessageBuilderDelegate;
+import org.javacord.api.entity.message.mention.internal.AllowedMentionsBuilderDelegate;
 import org.javacord.api.entity.permission.Permissions;
 import org.javacord.api.entity.permission.Role;
 import org.javacord.api.entity.permission.internal.PermissionsBuilderDelegate;
@@ -50,6 +51,7 @@ import org.javacord.core.entity.emoji.CustomEmojiBuilderDelegateImpl;
 import org.javacord.core.entity.emoji.CustomEmojiUpdaterDelegateImpl;
 import org.javacord.core.entity.message.MessageBuilderDelegateImpl;
 import org.javacord.core.entity.message.embed.EmbedBuilderDelegateImpl;
+import org.javacord.core.entity.message.mention.AllowedMentionsBuilderDelegateImpl;
 import org.javacord.core.entity.permission.PermissionsBuilderDelegateImpl;
 import org.javacord.core.entity.permission.RoleBuilderDelegateImpl;
 import org.javacord.core.entity.permission.RoleUpdaterDelegateImpl;
@@ -75,6 +77,11 @@ public class DelegateFactoryDelegateImpl implements DelegateFactoryDelegate {
     @Override
     public EmbedBuilderDelegate createEmbedBuilderDelegate() {
         return new EmbedBuilderDelegateImpl();
+    }
+
+    @Override
+    public AllowedMentionsBuilderDelegate createAllowedMentionsBuilderDelegate() {
+        return new AllowedMentionsBuilderDelegateImpl();
     }
 
     @Override

@@ -7,10 +7,12 @@ import org.apache.logging.log4j.Logger;
 import org.javacord.api.AccountType;
 import org.javacord.api.DiscordApi;
 import org.javacord.api.audio.AudioConnection;
+import org.javacord.api.Javacord;
 import org.javacord.api.entity.DiscordClient;
 import org.javacord.api.entity.DiscordEntity;
 import org.javacord.api.entity.Icon;
 import org.javacord.api.entity.Region;
+import org.javacord.api.entity.VanityUrlCode;
 import org.javacord.api.entity.activity.Activity;
 import org.javacord.api.entity.auditlog.AuditLog;
 import org.javacord.api.entity.auditlog.AuditLogActionType;
@@ -23,10 +25,12 @@ import org.javacord.api.entity.channel.ServerVoiceChannel;
 import org.javacord.api.entity.emoji.KnownCustomEmoji;
 import org.javacord.api.entity.permission.Role;
 import org.javacord.api.entity.server.Ban;
+import org.javacord.api.entity.server.BoostLevel;
 import org.javacord.api.entity.server.DefaultMessageNotificationLevel;
 import org.javacord.api.entity.server.ExplicitContentFilterLevel;
 import org.javacord.api.entity.server.MultiFactorAuthenticationLevel;
 import org.javacord.api.entity.server.Server;
+import org.javacord.api.entity.server.ServerFeature;
 import org.javacord.api.entity.server.VerificationLevel;
 import org.javacord.api.entity.server.invite.RichInvite;
 import org.javacord.api.entity.user.User;
@@ -35,9 +39,11 @@ import org.javacord.api.entity.webhook.Webhook;
 import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.audio.AudioConnectionImpl;
 import org.javacord.core.entity.IconImpl;
+import org.javacord.core.entity.VanityUrlCodeImpl;
 import org.javacord.core.entity.activity.ActivityImpl;
 import org.javacord.core.entity.auditlog.AuditLogImpl;
 import org.javacord.core.entity.channel.ChannelCategoryImpl;
+import org.javacord.core.entity.channel.ServerChannelImpl;
 import org.javacord.core.entity.channel.ServerTextChannelImpl;
 import org.javacord.core.entity.channel.ServerVoiceChannelImpl;
 import org.javacord.core.entity.permission.RoleImpl;
@@ -63,6 +69,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -248,9 +255,63 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     private final Collection<KnownCustomEmoji> customEmojis = new ArrayList<>();
 
     /**
+     * A list with all features from this server.
+     */
+    private final Collection<ServerFeature> serverFeatures = new ArrayList<>();
+
+    /**
+     * The premium tier level of the server.
+     */
+    private volatile BoostLevel boostLevel;
+
+    /**
+     * The server's premium subscription count.
+     */
+    private volatile int serverBoostCount = 0;
+
+    /**
+     * The server's rules channel id.
+     */
+    private volatile long rulesChannelId = -1;
+    /**
+     * The servers description.
+     */
+    private volatile String description;
+
+    /**
+     * The id of the server's moderators-only channel.
+     */
+    private volatile long moderatorsOnlyChannelId = -1;
+
+    /**
+     * The servers preferred locale.
+     */
+    private volatile Locale preferredLocale;
+
+    /**
+     * The servers vanity.
+     */
+    private volatile VanityUrlCode vanityUrlCode;
+
+    /**
+     * The discovery splash of the server. Might be <code>null</code>.
+     */
+    private volatile String discoverySplash;
+
+    /**
+     * Whether the server has join messages enabled.
+     */
+    private volatile boolean hasJoinMessagesEnabled = true;
+
+    /**
+     * Whether the server has boost messages enabled.
+     */
+    private volatile boolean hasBoostMessagesEnabled = true;
+
+    /**
      * Creates a new server object.
      *
-     * @param api The discord api instance.
+     * @param api  The discord api instance.
      * @param data The json data of the server.
      */
     public ServerImpl(DiscordApiImpl api, JsonNode data) {
@@ -267,6 +328,8 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
         defaultMessageNotificationLevel =
                 DefaultMessageNotificationLevel.fromId(data.get("default_message_notifications").asInt());
         multiFactorAuthenticationLevel = MultiFactorAuthenticationLevel.fromId(data.get("mfa_level").asInt());
+        boostLevel = BoostLevel.fromId(data.get("premium_tier").asInt());
+        preferredLocale = new Locale.Builder().setLanguageTag(data.get("preferred_locale").asText()).build();
         if (data.has("icon") && !data.get("icon").isNull()) {
             iconHash = data.get("icon").asText();
         }
@@ -284,6 +347,30 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
         }
         if (data.hasNonNull("application_id")) {
             applicationId = data.get("application_id").asLong();
+        }
+        if (data.has("features")) {
+            data.get("features").forEach(jsonNode -> addFeature(jsonNode.asText()));
+        }
+        if (data.has("premium_subscription_count")) {
+            serverBoostCount = data.get("premium_subscription_count").asInt();
+        }
+        if (data.hasNonNull("rules_channel_id")) {
+            rulesChannelId = data.get("rules_channel_id").asLong();
+        }
+        if (data.hasNonNull("description")) {
+            description = data.get("description").asText();
+        }
+        if (data.hasNonNull("public_updates_channel_id")) {
+            moderatorsOnlyChannelId = data.get("public_updates_channel_id").asLong();
+        }
+        if (data.hasNonNull("discovery_splash")) {
+            discoverySplash = data.get("discovery_splash").asText();
+        }
+        if (data.hasNonNull("vanity_url_code")) {
+            vanityUrlCode = new VanityUrlCodeImpl(data.get("vanity_url_code").asText());
+        }
+        if (data.hasNonNull("system_channel_flags")) {
+            setSystemChannelFlag(data.get("system_channel_flags").asInt());
         }
 
         if (data.has("channels")) {
@@ -388,6 +475,31 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
         }
 
         api.addServerToCache(this);
+    }
+
+    /**
+     * Sets the system channel flags.
+     *
+     * @param value The system channel flag.
+     */
+    public void setSystemChannelFlag(int value) {
+        hasJoinMessagesEnabled = (value & (1)) != (1);
+        hasBoostMessagesEnabled = (value & (1 << 1)) != (1 << 1);
+    }
+
+    /**
+     * Adds the feature to the collection.
+     *
+     * @param feature The feature to add.
+     */
+    private void addFeature(String feature) {
+        try {
+            serverFeatures.add(ServerFeature.valueOf(feature));
+        } catch (Exception ignored) {
+            logger.debug("Encountered server with unknown feature {}. Please update to the latest "
+                    + "Javacord version or create an issue on the Javacord GitHub page if you are "
+                    + "already on the latest version.", feature);
+        }
     }
 
     /**
@@ -735,7 +847,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     /**
      * Sets the nickname of the user.
      *
-     * @param user The user.
+     * @param user     The user.
      * @param nickname The nickname to set.
      */
     public void setNickname(User user, String nickname) {
@@ -746,7 +858,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      * Sets the self-muted state of the user with the given id.
      *
      * @param userId The id of the user.
-     * @param muted Whether the user with the given id is self-muted or not.
+     * @param muted  Whether the user with the given id is self-muted or not.
      */
     public void setSelfMuted(long userId, boolean muted) {
         if (muted) {
@@ -759,7 +871,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     /**
      * Sets the self-deafened state of the user with the given id.
      *
-     * @param userId The id of the user.
+     * @param userId   The id of the user.
      * @param deafened Whether the user with the given id is self-deafened or not.
      */
     public void setSelfDeafened(long userId, boolean deafened) {
@@ -774,7 +886,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      * Sets the muted state of the user with the given id.
      *
      * @param userId The id of the user.
-     * @param muted Whether the user with the given id is muted or not.
+     * @param muted  Whether the user with the given id is muted or not.
      */
     public void setMuted(long userId, boolean muted) {
         if (muted) {
@@ -787,7 +899,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     /**
      * Sets the deafened state of the user with the given id.
      *
-     * @param userId The id of the user.
+     * @param userId   The id of the user.
      * @param deafened Whether the user with the given id is deafened or not.
      */
     public void setDeafened(long userId, boolean deafened) {
@@ -816,6 +928,97 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      */
     public void setName(String name) {
         this.name = name;
+    }
+
+    /**
+     * Sets the rules channel of the server.
+     *
+     * @param rulesChannelId The rules channel of the server.
+     */
+    public void setRulesChannelId(long rulesChannelId) {
+        this.rulesChannelId = rulesChannelId;
+    }
+
+    /**
+     * Sets the moderators-only channel of the server.
+     *
+     * @param moderatorsOnlyChannelId The moderators-only channel of the server.
+     */
+    public void setModeratorsOnlyChannelId(long moderatorsOnlyChannelId) {
+        this.moderatorsOnlyChannelId = moderatorsOnlyChannelId;
+    }
+
+    /**
+     * Sets the boost level of the server.
+     *
+     * @param boostLevel The boost level of the server.
+     */
+    public void setBoostLevel(BoostLevel boostLevel) {
+        this.boostLevel = boostLevel;
+    }
+
+    /**
+     * Sets the preferred locale of the server.
+     *
+     * @param preferredLocale The preferred locale of the server.
+     */
+    public void setPreferredLocale(Locale preferredLocale) {
+        this.preferredLocale = preferredLocale;
+    }
+
+    /**
+     * Sets the server boost count of the server.
+     *
+     * @param serverBoostCount The server boost count of the server.
+     */
+    public void setServerBoostCount(int serverBoostCount) {
+        this.serverBoostCount = serverBoostCount;
+    }
+
+    /**
+     * Sets the description of the server.
+     *
+     * @param description The description of the server.
+     */
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    /**
+     * Sets the discovery splash hash of the server.
+     *
+     * @param discoverySplashHash The discovery splash hash of the server.
+     */
+    public void setDiscoverySplashHash(String discoverySplashHash) {
+        discoverySplash = discoverySplashHash;
+    }
+
+    /**
+     * Gets the discovery splash hash of the server.
+     *
+     * @return The discovery splash hash of the server.
+     */
+    public String getDiscoverySplashHash() {
+        return discoverySplash;
+    }
+
+    /**
+     * Sets the vanity url code of the server.
+     *
+     * @param vanityUrlCode The vanity url code of the server.
+     */
+    public void setVanityUrlCode(VanityUrlCode vanityUrlCode) {
+        this.vanityUrlCode = vanityUrlCode;
+    }
+
+    /**
+     * Sets the server feature of the server.
+     *
+     * @param serverFeatures The server feature of the server.
+     */
+    public void setServerFeatures(Collection<ServerFeature> serverFeatures) {
+        this.serverFeatures.clear();
+        this.serverFeatures.addAll(serverFeatures);
     }
 
     /**
@@ -907,6 +1110,70 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     }
 
     @Override
+    public boolean hasBoostMessagesEnabled() {
+        return hasBoostMessagesEnabled;
+    }
+
+    @Override
+    public boolean hasJoinMessagesEnabled() {
+        return hasJoinMessagesEnabled;
+    }
+
+    @Override
+    public Collection<ServerFeature> getFeatures() {
+        return Collections.unmodifiableCollection(new HashSet<>(serverFeatures));
+    }
+
+    @Override
+    public BoostLevel getBoostLevel() {
+        return boostLevel;
+    }
+
+    @Override
+    public int getBoostCount() {
+        return serverBoostCount;
+    }
+
+    @Override
+    public Optional<ServerTextChannel> getRulesChannel() {
+        return getTextChannelById(rulesChannelId);
+    }
+
+    @Override
+    public Optional<String> getDescription() {
+        return Optional.ofNullable(description);
+    }
+
+    @Override
+    public Optional<ServerTextChannel> getModeratorsOnlyChannel() {
+        return getTextChannelById(moderatorsOnlyChannelId);
+    }
+
+    @Override
+    public Optional<VanityUrlCode> getVanityUrlCode() {
+        return Optional.ofNullable(vanityUrlCode);
+    }
+
+    @Override
+    public Optional<Icon> getDiscoverySplash() {
+        if (splash == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new IconImpl(
+                    getApi(),
+                    new URL("https://cdn.discordapp.com/discovery-splashes/" + getIdAsString() + "/" + discoverySplash + ".png")));
+        } catch (MalformedURLException e) {
+            throw new AssertionError("Unexpected malformed discovery splash url", e);
+        }
+    }
+
+    @Override
+    public Locale getPreferredLocale() {
+        return preferredLocale;
+    }
+
+    @Override
     public Region getRegion() {
         return region;
     }
@@ -990,7 +1257,8 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
         try {
             return Optional.of(new IconImpl(
                     getApi(),
-                    new URL("https://cdn.discordapp.com/icons/" + getIdAsString() + "/" + iconHash + ".png")));
+                    new URL("https://" + Javacord.DISCORD_CDN_DOMAIN
+                            + "/icons/" + getIdAsString() + "/" + iconHash + ".png")));
         } catch (MalformedURLException e) {
             logger.warn("Seems like the url of the icon is malformed! Please contact the developer!", e);
             return Optional.empty();
@@ -1005,7 +1273,8 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
         try {
             return Optional.of(new IconImpl(
                     getApi(),
-                    new URL("https://cdn.discordapp.com/splashes/" + getIdAsString() + "/" + splash + ".png")));
+                    new URL("https://" + Javacord.DISCORD_CDN_DOMAIN
+                            + "/splashes/" + getIdAsString() + "/" + splash + ".png")));
         } catch (MalformedURLException e) {
             logger.warn("Seems like the url of the icon is malformed! Please contact the developer!", e);
             return Optional.empty();
@@ -1075,7 +1344,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     @Override
     public List<Role> getRoles() {
         return Collections.unmodifiableList(roles.values().stream()
-                .sorted(Comparator.comparingInt(Role::getPosition))
+                .sorted()
                 .collect(Collectors.toList()));
     }
 
@@ -1232,7 +1501,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
                 boolean requestMore = true;
                 while (requestMore) {
                     int requestAmount = limit - auditLog.getEntries().size();
-                    requestAmount = requestAmount > 100 ? 100 : requestAmount;
+                    requestAmount = Math.min(requestAmount, 100);
                     RestRequest<JsonNode> request =
                             new RestRequest<JsonNode>(getApi(), RestMethod.GET, RestEndpoint.AUDIT_LOG)
                                     .setUrlParameters(getIdAsString())
@@ -1279,9 +1548,8 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
                         .map(categorizable -> !categorizable.getCategory().isPresent())
                         .orElse(false))
                 .sorted(Comparator
-                                .<ServerChannel>comparingInt(channel -> channel.getType().getId())
-                                .thenComparingInt(ServerChannel::getRawPosition)
-                                .thenComparingLong(ServerChannel::getId))
+                        .<ServerChannel>comparingInt(channel -> channel.getType().getId())
+                        .thenComparing(ServerChannelImpl.COMPARE_BY_RAW_POSITION))
                 .collect(Collectors.toList());
         getChannelCategories().forEach(category -> {
             channels.add(category);
@@ -1294,7 +1562,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public List<ChannelCategory> getChannelCategories() {
         return Collections.unmodifiableList(getUnorderedChannels().stream()
                 .filter(channel -> channel instanceof ChannelCategory)
-                .sorted(Comparator.comparingInt(ServerChannel::getRawPosition).thenComparingLong(ServerChannel::getId))
+                .sorted(ServerChannelImpl.COMPARE_BY_RAW_POSITION)
                 .map(channel -> (ChannelCategory) channel)
                 .collect(Collectors.toList()));
     }
@@ -1303,7 +1571,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public List<ServerTextChannel> getTextChannels() {
         return Collections.unmodifiableList(getUnorderedChannels().stream()
                 .filter(channel -> channel instanceof ServerTextChannel)
-                .sorted(Comparator.comparingInt(ServerChannel::getRawPosition).thenComparingLong(ServerChannel::getId))
+                .sorted(ServerChannelImpl.COMPARE_BY_RAW_POSITION)
                 .map(channel -> (ServerTextChannel) channel)
                 .collect(Collectors.toList()));
     }
@@ -1312,7 +1580,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public List<ServerVoiceChannel> getVoiceChannels() {
         return Collections.unmodifiableList(getUnorderedChannels().stream()
                 .filter(channel -> channel instanceof ServerVoiceChannel)
-                .sorted(Comparator.comparingInt(ServerChannel::getRawPosition).thenComparingLong(ServerChannel::getId))
+                .sorted(ServerChannelImpl.COMPARE_BY_RAW_POSITION)
                 .map(channel -> (ServerVoiceChannel) channel)
                 .collect(Collectors.toList()));
     }
@@ -1336,9 +1604,9 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     @Override
     public boolean equals(Object o) {
         return (this == o)
-               || !((o == null)
-                    || (getClass() != o.getClass())
-                    || (getId() != ((DiscordEntity) o).getId()));
+                || !((o == null)
+                || (getClass() != o.getClass())
+                || (getId() != ((DiscordEntity) o).getId()));
     }
 
     @Override

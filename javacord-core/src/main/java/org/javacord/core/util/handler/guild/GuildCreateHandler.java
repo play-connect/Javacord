@@ -3,7 +3,6 @@ package org.javacord.core.util.handler.guild;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.logging.log4j.Logger;
 import org.javacord.api.DiscordApi;
-import org.javacord.api.entity.server.Server;
 import org.javacord.api.event.server.ServerBecomesAvailableEvent;
 import org.javacord.api.event.server.ServerJoinEvent;
 import org.javacord.core.DiscordApiImpl;
