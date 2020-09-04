@@ -19,7 +19,7 @@ import org.javacord.core.util.logging.LoggerUtil;
 public class GuildCreateHandler extends PacketHandler {
 
     /**
-     * Logger of this class
+     * The logger of this class.
      */
     private static final Logger logger = LoggerUtil.getLogger(GuildCreateHandler.class);
 
