@@ -479,7 +479,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 .addNetworkInterceptor(chain -> {
                     getGlobalRatelimiter().ifPresent(ratelimiter -> {
                         try {
-                            ratelimiter.requestQuota();
+                            ratelimiter.requestQuota(chain.request().method() + " " + chain.request().url().toString());
                         } catch (InterruptedException e) {
                             logger.warn("Encountered unexpected ratelimiter interrupt", e);
                         }
