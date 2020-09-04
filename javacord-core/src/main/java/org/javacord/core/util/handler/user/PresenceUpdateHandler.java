@@ -11,7 +11,6 @@ import org.javacord.api.event.user.UserChangeAvatarEvent;
 import org.javacord.api.event.user.UserChangeDiscriminatorEvent;
 import org.javacord.api.event.user.UserChangeNameEvent;
 import org.javacord.api.event.user.UserChangeStatusEvent;
-import org.javacord.core.entity.activity.ActivityImpl;
 import org.javacord.core.entity.user.UserImpl;
 import org.javacord.core.event.user.UserChangeActivityEventImpl;
 import org.javacord.core.event.user.UserChangeAvatarEventImpl;
@@ -21,9 +20,7 @@ import org.javacord.core.event.user.UserChangeStatusEventImpl;
 import org.javacord.core.util.gateway.PacketHandler;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * Handles the presence update packet.

@@ -5,7 +5,6 @@ import org.apache.logging.log4j.Logger;
 import org.javacord.api.DiscordApi;
 import org.javacord.api.event.server.ServerBecomesAvailableEvent;
 import org.javacord.api.event.server.ServerJoinEvent;
-import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.entity.server.ServerImpl;
 import org.javacord.core.event.server.ServerBecomesAvailableEventImpl;
 import org.javacord.core.event.server.ServerJoinEventImpl;
