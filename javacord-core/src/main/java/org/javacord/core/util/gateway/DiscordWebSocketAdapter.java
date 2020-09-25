@@ -453,6 +453,8 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
             websocket.addHeader("Accept-Encoding", "gzip");
             websocket.addListener(this);
             websocket.addListener(new WebSocketLogger());
+
+            api.getGatewayIdentifyRatelimiter().requestQuota();
             websocket.connect();
         } catch (Throwable t) {
             logger.warn("An error occurred while connecting to websocket", t);
@@ -638,6 +640,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                         return;
                     }
                 }
+                api.getGatewayIdentifyRatelimiter().requestQuota();
                 sendIdentify(websocket);
                 break;
             case HELLO:
@@ -699,7 +702,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
      *
      * @param websocket The websocket the identify packet should be sent to.
      */
-    private void sendIdentify(WebSocket websocket) throws InterruptedException {
+    private void sendIdentify(WebSocket websocket) {
         ObjectNode identifyPacket = JsonNodeFactory.instance.objectNode()
                 .put("op", GatewayOpcode.IDENTIFY.getCode());
         ObjectNode data = identifyPacket.putObject("d");
@@ -743,7 +746,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
         websocket.addListener(identifyFrameListener);
 
         logger.debug("Sending identify packet");
-        api.getGatewayIdentifyRatelimiter().requestQuota();
         sendLifecycleFrame(websocket, identifyFrame);
     }
 
