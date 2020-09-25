@@ -629,12 +629,12 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                     logger.info("Hit identifying rate limit. Retrying in 5 seconds...");
                 } else {
                     // Invalid session :(
-                    int zeroToFourSeconds = (int) (Math.random() * 4000);
+                    int oneToFiveSeconds = 1000 + (int) (Math.random() * 4000);
                     logger.info("Could not resume session. Reconnecting in {}.{} seconds...",
-                            () -> 1 + zeroToFourSeconds / 1000,
-                            () -> 1 + zeroToFourSeconds / 100 % 10);
+                            () -> oneToFiveSeconds / 1000,
+                            () -> oneToFiveSeconds / 100 % 10);
                     try {
-                        Thread.sleep(zeroToFourSeconds);
+                        Thread.sleep(oneToFiveSeconds);
                     } catch (InterruptedException e) {
                         logger.error("Interrupted while delaying reconnect!");
                         return;
