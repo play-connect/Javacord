@@ -741,6 +741,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
         };
         identifyFrameListeners.add(identifyFrameListener);
         websocket.addListener(identifyFrameListener);
+
         logger.debug("Sending identify packet");
         api.getGatewayIdentifyRatelimiter().requestQuota();
         sendLifecycleFrame(websocket, identifyFrame);
