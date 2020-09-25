@@ -1333,11 +1333,13 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
 
     @Override
     public Ratelimiter getGatewayIdentifyRatelimiter() {
-        return Optional.ofNullable(gatewayIdentifyRatelimiter)
-                .orElseGet(() -> defaultGatewayIdentifyRatelimiter.computeIfAbsent(
-                        getToken(),
-                        (token) -> new LocalRatelimiter(1, Duration.ofMillis(5100)))
-                );
+        if (gatewayIdentifyRatelimiter == null) {
+            return defaultGatewayIdentifyRatelimiter.computeIfAbsent(
+                    getToken(),
+                    (token) -> new LocalRatelimiter(1, Duration.ofMillis(5100))
+            );
+        }
+        return gatewayIdentifyRatelimiter;
     }
 
     @Override
