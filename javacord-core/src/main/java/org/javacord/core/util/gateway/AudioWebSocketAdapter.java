@@ -10,10 +10,9 @@ import com.neovisionaries.ws.client.WebSocketFactory;
 import com.neovisionaries.ws.client.WebSocketFrame;
 import org.apache.logging.log4j.Logger;
 import org.javacord.api.Javacord;
+import org.javacord.api.audio.SpeakingFlag;
 import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.audio.AudioConnectionImpl;
-import org.javacord.core.entity.server.ServerImpl;
-import org.javacord.core.util.http.TrustAllTrustManager;
 import org.javacord.core.util.logging.LoggerUtil;
 import org.javacord.core.util.logging.WebSocketLogger;
 
@@ -60,7 +59,7 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
     /**
      * Whether a {@link VoiceGatewayOpcode#RESUME} should be sent or a normal connect.
      */
-    private volatile boolean sendResume;
+    private volatile boolean resuming;
 
     // A reconnect attempt counter
     private final AtomicInteger reconnectAttempt = new AtomicInteger();
@@ -100,7 +99,7 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
         switch (opcode.get()) {
             case HELLO:
                 logger.debug("Received {} packet for {}", opcode.get().name(), connection);
-                if (!sendResume) {
+                if (!resuming) {
                     sendIdentify(websocket);
                 }
                 JsonNode data = packet.get("d");
@@ -117,12 +116,11 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
 
                 socket = new AudioUdpSocket(connection, new InetSocketAddress(ip, port), ssrc);
                 sendSelectProtocol(websocket);
-
-                // TODO remove
-                sendSpeaking(websocket, false);
                 Thread.sleep(1000);
                 break;
             case SESSION_DESCRIPTION:
+                sendSpeaking(websocket);
+
                 data = packet.get("d");
                 byte[] secretKey = api.getObjectMapper().convertValue(data.get("secret_key"), byte[].class);
                 socket.setSecretKey(secretKey);
@@ -134,6 +132,8 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
                 // Handled in the heart
                 break;
             case RESUMED:
+                resuming = false;
+                reconnectAttempt.set(0);
                 logger.info("Successfully resumed audio websocket connection for {}", connection);
                 break;
             default:
@@ -156,8 +156,9 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
 
     @Override
     public void onConnected(WebSocket websocket, Map<String, List<String>> headers) {
-        if (sendResume) {
+        if (resuming) {
             sendResume(websocket);
+            socket.startSending();
         }
     }
 
@@ -168,62 +169,83 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
         Optional<WebSocketFrame> closeFrameOptional =
                 Optional.ofNullable(closedByServer ? serverCloseFrame : clientCloseFrame);
 
+        WebSocketCloseCode closeCode = closeFrameOptional
+                .flatMap(closeFrame -> WebSocketCloseCode.fromCodeForVoice(closeFrame.getCloseCode()))
+                .orElse(WebSocketCloseCode.UNKNOWN);
+
         String closeReason = closeFrameOptional
                 .map(WebSocketFrame::getCloseReason)
                 .orElse("unknown");
 
-        String closeCodeString = closeFrameOptional
-                .map(closeFrame -> {
-                    int code = closeFrame.getCloseCode();
-                    return WebSocketCloseCode.fromCode(code)
-                            .map(closeCode -> closeCode + " (" + code + ")")
-                            .orElseGet(() -> String.valueOf(code));
-                })
-                .orElse("'unknown'");
+        String closeCodeString = closeCode + " ("
+                + (closeCode == WebSocketCloseCode.UNKNOWN ? "Unknown" : closeCode.getCode()) + ")";
 
-        if (!reconnect) {
-            // Remove the connection from the server to allow the user to establish a new connection
-            ((ServerImpl) connection.getServer()).removeAudioConnection(connection);
-        }
 
         logger.info("Websocket closed with reason '{}' and code {} by {} for {}!",
                 closeReason, closeCodeString, closedByServer ? "server" : "client", connection);
 
-        // Squash it, until it stops beating
+        // Squash heart, until it stops beating
         heart.squash();
+        //Pause UDP sending
+        socket.stopSending();
 
-        if (connection.getDisconnectFuture() != null) {
-            connection.getDisconnectFuture().complete(null);
-        }
-
-        if (!connection.getReadyFuture().isDone()) {
-            connection.getReadyFuture().completeExceptionally(
-                    new IllegalStateException(
-                            "Audio websocket closed with reason '"
-                            + closeReason
-                            + "' and code "
-                            + closeCodeString
-                            + " by "
-                            + (closedByServer ? "server" : "client")
-                            + " before "
-                            + VoiceGatewayOpcode.SESSION_DESCRIPTION.name()
-                            + " packet was received"
-                    )
-            );
-        }
-
-        if (reconnect) {
-            sendResume = !closeFrameOptional
-                    .map(WebSocketFrame::getCloseCode)
-                    .flatMap(WebSocketCloseCode::fromCode)
-                    .map(WebSocketCloseCode.SESSION_TIMEOUT::equals)// Do not send resume
-                    .orElse(false);
-            reconnectAttempt.incrementAndGet();
-            logger.info("Trying to reconnect/resume audio websocket in {} seconds!",
-                    api.getReconnectDelay(reconnectAttempt.get()));
-            // Reconnect after a (short?) delay depending on the amount of reconnect attempts
+        if (resuming) {
+            logger.info("Could not resume, reconnecting in {} seconds", api.getReconnectDelay(reconnectAttempt.get()));
+            resuming = false;
+            reconnectAttempt.set(0);
             api.getThreadPool().getScheduler()
                     .schedule(this::connect, api.getReconnectDelay(reconnectAttempt.get()), TimeUnit.SECONDS);
+            return;
+        }
+
+        switch (closeCode) {
+            case AUTHENTICATION_FAILED:
+            case SERVER_NOT_FOUND:
+                connection.close();
+                break;
+            case SESSION_NO_LONGER_VALID:
+            case DISCONNECTED:
+                if (!connection.getReadyFuture().isDone()) {
+                    connection.getReadyFuture().completeExceptionally(
+                            new IllegalStateException(
+                                    "Audio websocket closed with reason '"
+                                            + closeReason
+                                            + "' and code "
+                                            + closeCodeString
+                                            + " by "
+                                            + (closedByServer ? "server" : "client")
+                                            + " before "
+                                            + VoiceGatewayOpcode.SESSION_DESCRIPTION.name()
+                                            + " packet was received"
+                            )
+                    );
+                }
+                disconnect();
+                // TODO There are multiple reasons for a disconnect close code and we do not want to reconnect
+                //  for all of them (e.g., when the channel was deleted).
+                connection.reconnect();
+                break;
+            case UNKNOWN_ERROR:
+            case UNKNOWN_OPCODE:
+            case UNKNOWN_PROTOCOL:
+            case UNKNOWN_ENCRYPTION_MODE:
+            case VOICE_SERVER_CRASHED:
+                resuming = true;
+                logger.info("Trying to resume audio websocket in {} seconds!",
+                        api.getReconnectDelay(reconnectAttempt.get()));
+                api.getThreadPool().getScheduler()
+                        .schedule(this::connect, api.getReconnectDelay(reconnectAttempt.get()), TimeUnit.SECONDS);
+                break;
+            case NORMAL:
+                if (!closedByServer && connection.getDisconnectFuture() != null) {
+                    connection.getDisconnectFuture().complete(null);
+                } else {
+                    reconnect();
+                }
+                break;
+            default:
+                reconnect();
+                break;
         }
     }
 
@@ -254,9 +276,8 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
             websocket.addListener(new WebSocketLogger());
             websocket.connect();
         } catch (Throwable t) {
-            logger.warn("An error occurred while connecting to audio websocket for {}", connection, t);
+            logger.warn("An error occurred while connecting to audio websocket for {} ({})", connection, t.getCause());
             if (reconnect) {
-                sendResume = false;
                 reconnectAttempt.incrementAndGet();
                 logger.info("Trying to reconnect/resume audio websocket in {} seconds!",
                         api.getReconnectDelay(reconnectAttempt.get()));
@@ -265,6 +286,18 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
                         .schedule(this::connect, api.getReconnectDelay(reconnectAttempt.get()), TimeUnit.SECONDS);
             }
         }
+    }
+
+    /**
+     * Starts a reconnect attempt.
+     */
+    private void reconnect() {
+        reconnectAttempt.incrementAndGet();
+        logger.info("Trying to reconnect audio websocket in {} seconds!",
+                api.getReconnectDelay(reconnectAttempt.get()));
+        // Reconnect after a (short?) delay depending on the amount of reconnect attempts
+        api.getThreadPool().getScheduler()
+                .schedule(this::connect, api.getReconnectDelay(reconnectAttempt.get()), TimeUnit.SECONDS);
     }
 
     /**
@@ -339,14 +372,17 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
      * Sends the speaking packet.
      *
      * @param websocket The websocket the packet should be sent to.
-     * @param speaking Whether speaking should be displayed or not.
      */
-    private void sendSpeaking(WebSocket websocket, boolean speaking) {
+    private void sendSpeaking(WebSocket websocket) {
         ObjectNode speakingPacket = JsonNodeFactory.instance.objectNode();
+        int speakingFlags = 0;
+        for (SpeakingFlag flag : connection.getSpeakingFlags()) {
+            speakingFlags |= flag.asInt();
+        }
         speakingPacket
                 .put("op", VoiceGatewayOpcode.SPEAKING.getCode())
                 .putObject("d")
-                .put("speaking", speaking ? 1 : 0)
+                .put("speaking", speakingFlags)
                 .put("delay", 0)
                 .put("ssrc", ssrc);
         logger.debug("Sending speaking packet for {} (packet: {})", connection, speakingPacket);
@@ -356,10 +392,8 @@ public class AudioWebSocketAdapter extends WebSocketAdapter {
 
     /**
      * Sends the speaking packet.
-     *
-     * @param speaking Whether speaking should be displayed or not.
      */
-    public void sendSpeaking(boolean speaking) {
-        sendSpeaking(websocket.get(), speaking);
+    public void sendSpeaking() {
+        sendSpeaking(websocket.get());
     }
 }

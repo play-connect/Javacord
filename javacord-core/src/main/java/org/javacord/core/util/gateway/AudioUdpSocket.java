@@ -16,7 +16,6 @@ import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
 
 public class AudioUdpSocket {
 
@@ -113,14 +112,14 @@ public class AudioUdpSocket {
                 long framesOfSilenceToPlay = 5;
                 while (shouldSend) {
                     // Get the current audio source. If none is available, it will block the thread
-                    AudioSource source = connection.getCurrentAudioSourceBlocking(Long.MAX_VALUE, TimeUnit.DAYS);
+                    AudioSource source = connection.getCurrentAudioSourceBlocking();
                     if (source == null) {
                         logger.error("Got null audio source without being interrupted ({})", connection);
                         return;
                     }
 
                     if (source.hasFinished()) {
-                        connection.removeCurrentSource();
+                        connection.removeAudioSource();
                         dontSleep = true;
 
                         // Dispatch AudioSourceFinishedEvent AFTER removing the source.
@@ -142,7 +141,7 @@ public class AudioUdpSocket {
                     }
 
                     if (frame != null || framesOfSilenceToPlay > 0) {
-                        if (!speaking) {
+                        if (!speaking && frame != null) {
                             speaking = true;
                             connection.setSpeaking(true);
                         }
@@ -189,7 +188,7 @@ public class AudioUdpSocket {
     }
 
     /**
-     * Starts polling frames from the audio connection.
+     * Stops polling frames from the audio connection.
      */
     public void stopSending() {
         shouldSend = false;

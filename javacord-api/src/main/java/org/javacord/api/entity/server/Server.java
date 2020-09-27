@@ -2570,7 +2570,7 @@ public interface Server extends DiscordEntity, Nameable, UpdatableFromCache<Serv
         return target.getServer() == this
                 && (isOwner(user)
                 || (canManageRoles(user)
-                && getHighestRole(user).orElseGet(this::getEveryoneRole).compareTo(target) >= 0));
+                && getHighestRole(user).orElseGet(this::getEveryoneRole).compareTo(target) > 0));
     }
 
     /**

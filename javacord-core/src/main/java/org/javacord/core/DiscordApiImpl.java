@@ -14,7 +14,15 @@ import org.javacord.api.entity.ApplicationInfo;
 import org.javacord.api.entity.activity.Activity;
 import org.javacord.api.entity.activity.ActivityType;
 import org.javacord.api.entity.channel.Channel;
+import org.javacord.api.entity.channel.ChannelCategory;
+import org.javacord.api.entity.channel.ChannelType;
+import org.javacord.api.entity.channel.GroupChannel;
+import org.javacord.api.entity.channel.PrivateChannel;
+import org.javacord.api.entity.channel.ServerChannel;
+import org.javacord.api.entity.channel.ServerTextChannel;
+import org.javacord.api.entity.channel.ServerVoiceChannel;
 import org.javacord.api.entity.channel.TextChannel;
+import org.javacord.api.entity.channel.VoiceChannel;
 import org.javacord.api.entity.emoji.CustomEmoji;
 import org.javacord.api.entity.emoji.KnownCustomEmoji;
 import org.javacord.api.entity.message.Message;
@@ -30,7 +38,9 @@ import org.javacord.api.listener.ObjectAttachableListener;
 import org.javacord.api.util.auth.Authenticator;
 import org.javacord.api.util.concurrent.ThreadPool;
 import org.javacord.api.util.event.ListenerManager;
+import org.javacord.api.util.ratelimit.LocalRatelimiter;
 import org.javacord.api.util.ratelimit.Ratelimiter;
+import org.javacord.core.audio.AudioConnectionImpl;
 import org.javacord.core.entity.activity.ActivityImpl;
 import org.javacord.core.entity.activity.ApplicationInfoImpl;
 import org.javacord.core.entity.emoji.CustomEmojiImpl;
@@ -44,6 +54,7 @@ import org.javacord.core.entity.user.UserImpl;
 import org.javacord.core.entity.webhook.WebhookImpl;
 import org.javacord.core.util.ClassHelper;
 import org.javacord.core.util.Cleanupable;
+import org.javacord.core.util.cache.JavacordEntityCache;
 import org.javacord.core.util.concurrent.ThreadPoolImpl;
 import org.javacord.core.util.event.DispatchQueueSelector;
 import org.javacord.core.util.event.EventDispatcher;
@@ -62,6 +73,7 @@ import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.net.Proxy;
 import java.net.ProxySelector;
+import java.time.Duration;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -79,6 +91,9 @@ import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -93,6 +108,13 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      * The logger of this class.
      */
     private static final Logger logger = LoggerUtil.getLogger(DiscordApiImpl.class);
+
+    /**
+     * A map with the default global ratelimiter.
+     *
+     * <p>The key is the bot's token (because ratelimits are per account) and the key is the ratelimiter for this token.
+     */
+    private static final Map<String, Ratelimiter> defaultGlobalRatelimiter = new ConcurrentHashMap<>();
 
     /**
      * The thread pool which is used internally.
@@ -195,6 +217,17 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
     private final boolean waitForServersOnStartup;
 
     /**
+     * The latest gateway latency.
+     */
+    private volatile long latestGatewayLatencyNanos = -1;
+
+    /**
+     * A lock that makes sure that there are not more than one ping attempt at the same time.
+     * This ensures that the ping does not get affected by other requests that use the same bucket.
+     */
+    private final Lock restLatencyLock = new ReentrantLock();
+
+    /**
      * A ratelimiter that is used for global ratelimits.
      */
     private final Ratelimiter globalRatelimiter;
@@ -258,14 +291,27 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
     private final ReferenceQueue<User> usersCleanupQueue = new ReferenceQueue<>();
 
     /**
-     * Allows for a quick lookup for channels by their id.
+     * An immutable cache with all Javacord entities.
      */
-    private final ConcurrentHashMap<Long, Channel> channels = new ConcurrentHashMap<>();
+    private final AtomicReference<JavacordEntityCache> entityCache = new AtomicReference<>(JavacordEntityCache.empty());
 
     /**
      * A map which contains all servers that are ready.
      */
     private final ConcurrentHashMap<Long, Server> servers = new ConcurrentHashMap<>();
+
+    /**
+     * A map with audio connections. The key is the server id.
+     */
+    private final ConcurrentHashMap<Long, AudioConnectionImpl> audioConnections = new ConcurrentHashMap<>();
+
+    /**
+     * A map with pending audio connections. The key is the server id.
+     * A pending connection is a connect that is currently trying to connect to a websocket and establish an udp
+     * connection but has not finished.
+     * The field might still be set, even though the connection is no longer pending!
+     */
+    private final ConcurrentHashMap<Long, AudioConnectionImpl> pendingAudioConnections = new ConcurrentHashMap<>();
 
     /**
      * A map which contains all servers that are not ready.
@@ -335,7 +381,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      */
     public DiscordApiImpl(String token, Ratelimiter globalRatelimiter, ProxySelector proxySelector, Proxy proxy,
                           Authenticator proxyAuthenticator, boolean trustAllCertificates) {
-        this(AccountType.BOT, token, 0, 1, false, globalRatelimiter,
+        this(AccountType.BOT, token, 0, 1, true, globalRatelimiter,
                 proxySelector, proxy, proxyAuthenticator, trustAllCertificates, null);
     }
 
@@ -370,7 +416,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
             boolean trustAllCertificates,
             CompletableFuture<DiscordApi> ready
     ) {
-        this(accountType, token, currentShard, totalShards, waitForServersOnStartup, globalRatelimiter,
+        this(accountType, token, currentShard, totalShards, waitForServersOnStartup, true, globalRatelimiter,
                 proxySelector, proxy, proxyAuthenticator, trustAllCertificates, ready, null,
                 Collections.emptyMap(), Collections.emptyList());
     }
@@ -407,7 +453,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
             boolean trustAllCertificates,
             CompletableFuture<DiscordApi> ready,
             Dns dns) {
-        this(accountType, token, currentShard, totalShards, waitForServersOnStartup, globalRatelimiter,
+        this(accountType, token, currentShard, totalShards, waitForServersOnStartup, true, globalRatelimiter,
                 proxySelector, proxy, proxyAuthenticator, trustAllCertificates, ready, dns, Collections.emptyMap(),
                 Collections.emptyList());
     }
@@ -420,6 +466,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      * @param totalShards             The total amount of shards.
      * @param waitForServersOnStartup Whether Javacord should wait for all servers
      *                                to become available on startup or not.
+     * @param registerShutdownHook    Whether the shutdown hook should be registered or not.
      * @param globalRatelimiter       The ratelimiter used for global ratelimits.
      * @param proxySelector           The proxy selector which should be used to determine the proxies that should be
      *                                used to connect to the Discord REST API and websocket.
@@ -439,6 +486,7 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
             int currentShard,
             int totalShards,
             boolean waitForServersOnStartup,
+            boolean registerShutdownHook,
             Ratelimiter globalRatelimiter,
             ProxySelector proxySelector,
             Proxy proxy,
@@ -586,19 +634,32 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 }
             }, 30, 30, TimeUnit.SECONDS);
 
-            // Add shutdown hook
-            ready.thenAccept(api -> {
-                WeakReference<DiscordApi> discordApiReference = new WeakReference<>(api);
+            if (registerShutdownHook) {
+                // Add shutdown hook
+                ready.thenAccept(api -> {
+                    WeakReference<DiscordApi> discordApiReference = new WeakReference<>(api);
+                    Runtime.getRuntime().addShutdownHook(new Thread(() -> Optional.ofNullable(discordApiReference.get())
+                            .ifPresent(DiscordApi::disconnect),
+                            String.format("Javacord - Shutdown Disconnector (%s)", api)));
+                });
+            }
+        } else {
+            if (registerShutdownHook) {
+                WeakReference<DiscordApi> discordApiReference = new WeakReference<>(this);
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> Optional.ofNullable(discordApiReference.get())
                         .ifPresent(DiscordApi::disconnect),
-                        String.format("Javacord - Shutdown Disconnector (%s)", api)));
-            });
-        } else {
-            WeakReference<DiscordApi> discordApiReference = new WeakReference<>(this);
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> Optional.ofNullable(discordApiReference.get())
-                    .ifPresent(DiscordApi::disconnect),
-                    String.format("Javacord - Shutdown Disconnector (%s)", this)));
+                        String.format("Javacord - Shutdown Disconnector (%s)", this)));
+            }
         }
+    }
+
+    /**
+     * Gets the entity cache.
+     *
+     * @return The entity cache.
+     */
+    public AtomicReference<JavacordEntityCache> getEntityCache() {
+        return entityCache;
     }
 
     /**
@@ -658,16 +719,74 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
                 .map(Cleanupable.class::cast)
                 .forEach(Cleanupable::cleanup);
         servers.clear();
-        channels.values().stream()
+        entityCache.get().getChannelCache().getChannels().stream()
                 .filter(Cleanupable.class::isInstance)
                 .map(Cleanupable.class::cast)
                 .forEach(Cleanupable::cleanup);
-        channels.clear();
+        entityCache.set(JavacordEntityCache.empty());
         unavailableServers.clear();
         customEmojis.clear();
         messages.clear();
         messageIdByRef.clear();
         timeOffset = null;
+    }
+
+    /**
+     * Gets the audio connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     * @return The audio connection.
+     */
+    public AudioConnectionImpl getAudioConnectionByServerId(long serverId) {
+        return audioConnections.get(serverId);
+    }
+
+    /**
+     * Sets the audio connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     * @param connection The audio connection.
+     */
+    public void setAudioConnection(long serverId, AudioConnectionImpl connection) {
+        audioConnections.put(serverId, connection);
+    }
+
+    /**
+     * Removes the audio connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     */
+    public void removeAudioConnection(long serverId) {
+        audioConnections.remove(serverId);
+    }
+
+    /**
+     * Gets the pending audio connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     * @return The pending audio connection.
+     */
+    public AudioConnectionImpl getPendingAudioConnectionByServerId(long serverId) {
+        return pendingAudioConnections.get(serverId);
+    }
+
+    /**
+     * Sets the audio pending connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     * @param connection The pending audio connection.
+     */
+    public void setPendingAudioConnection(long serverId, AudioConnectionImpl connection) {
+        pendingAudioConnections.put(serverId, connection);
+    }
+
+    /**
+     * Removes the pending audio connection for the server with the given id.
+     *
+     * @param serverId The server id.
+     */
+    public void removePendingAudioConnection(long serverId) {
+        pendingAudioConnections.remove(serverId);
     }
 
     /**
@@ -752,10 +871,13 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      * @param channel The channel to add.
      */
     public void addChannelToCache(Channel channel) {
-        Channel oldChannel = channels.put(channel.getId(), channel);
-        if (oldChannel != channel && oldChannel instanceof Cleanupable) {
-            ((Cleanupable) oldChannel).cleanup();
-        }
+        entityCache.getAndUpdate(cache -> {
+            Channel oldChannel = cache.getChannelCache().getChannelById(channel.getId()).orElse(null);
+            if (oldChannel != channel && oldChannel instanceof Cleanupable) {
+                ((Cleanupable) oldChannel).cleanup();
+            }
+            return cache.updateChannelCache(channelCache -> channelCache.addChannel(channel));
+        });
     }
 
     /**
@@ -764,11 +886,15 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      * @param channelId The id of the channel to remove.
      */
     public void removeChannelFromCache(long channelId) {
-        channels.computeIfPresent(channelId, (key, channel) -> {
+        entityCache.getAndUpdate(cache -> {
+            Channel channel = cache.getChannelCache().getChannelById(channelId).orElse(null);
+            if (channel == null) {
+                return cache;
+            }
             if (channel instanceof Cleanupable) {
                 ((Cleanupable) channel).cleanup();
             }
-            return null;
+            return cache.updateChannelCache(channelCache -> channelCache.removeChannel(channel));
         });
     }
 
@@ -788,6 +914,24 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
      */
     private void removeUnavailableServerFromCache(long serverId) {
         unavailableServers.remove(serverId);
+    }
+
+    /**
+     * Gets the latest gateway latency in nano seconds.
+     *
+     * @return The latest gateway latency.
+     */
+    public long getLatestGatewayLatencyNanos() {
+        return latestGatewayLatencyNanos;
+    }
+
+    /**
+     * Sets the latest gateway latency in nano seconds.
+     *
+     * @param latestGatewayLatencyNanos The latest gateway latency.
+     */
+    public void setLatestGatewayLatencyNanos(long latestGatewayLatencyNanos) {
+        this.latestGatewayLatencyNanos = latestGatewayLatencyNanos;
     }
 
     /**
@@ -1146,7 +1290,32 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
 
     @Override
     public Optional<Ratelimiter> getGlobalRatelimiter() {
-        return Optional.ofNullable(globalRatelimiter);
+        if (globalRatelimiter == null) {
+            Ratelimiter ratelimiter = defaultGlobalRatelimiter.computeIfAbsent(
+                    getToken(),
+                    (token) -> new LocalRatelimiter(5, Duration.ofMillis((long) Math.ceil(5D / 45D))));
+            return Optional.of(ratelimiter);
+        }
+        return Optional.of(globalRatelimiter);
+    }
+
+    @Override
+    public Duration getLatestGatewayLatency() {
+        return Duration.ofNanos(latestGatewayLatencyNanos);
+    }
+
+    @Override
+    public CompletableFuture<Duration> measureRestLatency() {
+        return CompletableFuture.supplyAsync(() -> {
+            restLatencyLock.lock();
+            try {
+                RestRequest<Duration> request = new RestRequest<>(this, RestMethod.GET, RestEndpoint.CURRENT_USER);
+                long nanoStart = System.nanoTime();
+                return request.execute(result -> Duration.ofNanos(System.nanoTime() - nanoStart)).join();
+            } finally {
+                restLatencyLock.unlock();
+            }
+        }, getThreadPool().getExecutorService());
     }
 
     @Override
@@ -1482,12 +1651,52 @@ public class DiscordApiImpl implements DiscordApi, DispatchQueueSelector {
 
     @Override
     public Collection<Channel> getChannels() {
-        return Collections.unmodifiableCollection(new ArrayList<>(channels.values()));
+        return entityCache.get().getChannelCache().getChannels();
+    }
+
+    @Override
+    public Collection<GroupChannel> getGroupChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.GROUP_CHANNEL);
+    }
+
+    @Override
+    public Collection<PrivateChannel> getPrivateChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.PRIVATE_CHANNEL);
+    }
+
+    @Override
+    public Collection<ServerChannel> getServerChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.getServerChannelTypes());
+    }
+
+    @Override
+    public Collection<ChannelCategory> getChannelCategories() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.CHANNEL_CATEGORY);
+    }
+
+    @Override
+    public Collection<ServerTextChannel> getServerTextChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.SERVER_TEXT_CHANNEL);
+    }
+
+    @Override
+    public Collection<ServerVoiceChannel> getServerVoiceChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.SERVER_VOICE_CHANNEL);
+    }
+
+    @Override
+    public Collection<TextChannel> getTextChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.getTextChannelTypes());
+    }
+
+    @Override
+    public Collection<VoiceChannel> getVoiceChannels() {
+        return entityCache.get().getChannelCache().getChannelsWithTypes(ChannelType.getVoiceChannelTypes());
     }
 
     @Override
     public Optional<Channel> getChannelById(long id) {
-        return Optional.ofNullable(channels.get(id));
+        return entityCache.get().getChannelCache().getChannelById(id);
     }
 
     @Override

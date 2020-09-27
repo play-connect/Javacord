@@ -2,7 +2,10 @@ package org.javacord.core.util.handler.guild;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.javacord.api.DiscordApi;
-import org.javacord.core.entity.server.ServerImpl;
+import org.javacord.api.event.server.VoiceServerUpdateEvent;
+import org.javacord.core.audio.AudioConnectionImpl;
+import org.javacord.core.event.server.VoiceServerUpdateEventImpl;
+import org.javacord.core.util.event.DispatchQueueSelector;
 import org.javacord.core.util.gateway.PacketHandler;
 
 /**
@@ -26,13 +29,16 @@ public class VoiceServerUpdateHandler extends PacketHandler {
         long serverId = packet.get("guild_id").asLong();
 
         // We need the session id to connect to an audio websocket
-        api.getServerById(serverId)
-                .map(ServerImpl.class::cast)
-                .flatMap(ServerImpl::getPendingAudioConnection)
-                .ifPresent(connection -> {
-                    connection.setToken(token);
-                    connection.setEndpoint(endpoint);
-                    connection.tryConnect();
-                });
+        AudioConnectionImpl pendingAudioConnection =
+                api.getPendingAudioConnectionByServerId(serverId);
+        if (pendingAudioConnection != null) {
+            pendingAudioConnection.setToken(token);
+            pendingAudioConnection.setEndpoint(endpoint);
+            pendingAudioConnection.tryConnect();
+        }
+        api.getServerById(serverId).ifPresent(server -> {
+            VoiceServerUpdateEvent event = new VoiceServerUpdateEventImpl(server, token, endpoint);
+            api.getEventDispatcher().dispatchVoiceServerUpdateEvent((DispatchQueueSelector) server, server, event);
+        });
     }
 }

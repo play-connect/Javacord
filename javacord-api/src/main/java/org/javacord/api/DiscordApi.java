@@ -28,13 +28,14 @@ import org.javacord.api.entity.webhook.Webhook;
 import org.javacord.api.listener.GloballyAttachableListenerManager;
 import org.javacord.api.util.DiscordRegexPattern;
 import org.javacord.api.util.concurrent.ThreadPool;
+import org.javacord.api.util.ratelimit.LocalRatelimiter;
 import org.javacord.api.util.ratelimit.Ratelimiter;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
-import java.util.ArrayList;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
@@ -90,9 +91,57 @@ public interface DiscordApi extends GloballyAttachableListenerManager {
     /**
      * Gets the current global ratelimiter.
      *
+     * <p>**Note:** This method returns an {@code Optional} for historic reasons.
+     * If you did not provide a ratelimiter by yourself, this method will return a {@link LocalRatelimiter}
+     * which is set to {@code} request per {@code 111.1 ms}. This ratelimiter is shared by every bot with the same token
+     * in the same Java program.
+     *
      * @return The current global ratelimiter.
      */
     Optional<Ratelimiter> getGlobalRatelimiter();
+
+    /**
+     * Gets the latest gateway latency.
+     *
+     * <p>To calculate the gateway latency, Javacord measures the time it takes for Discord to answer the gateway
+     * heartbeat packet with a heartbeat ack packet. Please notice, that this values does only get updated on every
+     * heartbeat and not on every method call. To calculate an average, you have to collect the latency over a period of
+     * multiple minutes.
+     *
+     * <p>In very rare cases, the latency will be {@code -1 ns} directly after startup, because the initial heartbeat
+     * was not answered yet. Usually, the heartbeat is answered before the bot finished loading.
+     *
+     * <p><b>Expected latency</b>: Usually, you can expect a latency between {@code 30 ms} and {@code 300 ms} with a
+     * good internet connection. This value may vary, depending on your location, time of day, Discord's status, and the
+     * current workload of your system. A value above {@code 1000 ms} is usually an indicator that something is wrong.
+     *
+     * @return The latest measured gateway latency.
+     */
+    Duration getLatestGatewayLatency();
+
+    /**
+     * Measures, how long Javacord will need to perform a single REST call.
+     *
+     * <p>This method does not measure the "true" latency to Discord's REST endpoints because the request is handled by
+     * Javacord like any other request, including rate-limit handling. This causes some small delays that negatively
+     * affects the latency. However, this provides a somewhat realistic measurement on how long a typical REST call of
+     * Javacord will need. The latency is influenced by many non-network related factors like your system's current
+     * workload.
+     *
+     * <p>This method uses the {@code GET /users/@me} endpoint to test the latency.
+     * The method ensures that only one ping measurement is performed at once by the same {@code DiscordApi} instance.
+     *
+     * <p><b>Warning</b>: This method does not bypass the global ratelimit check.
+     * If your bot gets ratelimited globally, the latency will appear higher that it really is!
+     *
+     * <p><b>Expected latency</b>: Usually, you can expect a latency between {@code 50 ms} and {@code 500 ms} with a
+     * good internet connection. This value may vary, depending on your location, time of day, Discord's status, and the
+     * current workload of your system. A value above {@code 1000 ms} is usually an indicator that something is wrong.
+     * It is recommended to perform multiple tests and calculate an average value.
+     *
+     * @return The measured latency.
+     */
+    CompletableFuture<Duration> measureRestLatency();
 
     /**
      * Creates an invite link for the this bot.
@@ -991,104 +1040,56 @@ public interface DiscordApi extends GloballyAttachableListenerManager {
      *
      * @return A collection with all group channels of the bot.
      */
-    default Collection<GroupChannel> getGroupChannels() {
-        // Not very efficient, but it's a client-only feature and normal users can only be in 100 servers anyway
-        return Collections.unmodifiableList(
-                getChannels().stream()
-                        .filter(GroupChannel.class::isInstance)
-                        .map(GroupChannel.class::cast)
-                        .collect(Collectors.toList()));
-    }
+    Collection<GroupChannel> getGroupChannels();
 
     /**
      * Gets a collection with all private channels of the bot.
      *
      * @return A collection with all private channels of the bot.
      */
-    default Collection<PrivateChannel> getPrivateChannels() {
-        // TODO This can be improved
-        return Collections.unmodifiableList(
-                getChannels().stream()
-                        .filter(PrivateChannel.class::isInstance)
-                        .map(PrivateChannel.class::cast)
-                        .collect(Collectors.toList()));
-    }
+    Collection<PrivateChannel> getPrivateChannels();
 
     /**
      * Gets a collection with all server channels of the bot.
      *
      * @return A collection with all server channels of the bot.
      */
-    default Collection<ServerChannel> getServerChannels() {
-        // TODO This can be improved
-        Collection<ServerChannel> channels = new ArrayList<>();
-        getServers().forEach(server -> channels.addAll(server.getChannels()));
-        return Collections.unmodifiableCollection(channels);
-    }
+    Collection<ServerChannel> getServerChannels();
 
     /**
      * Gets a collection with all channel categories of the bot.
      *
      * @return A collection with all channel categories of the bot.
      */
-    default Collection<ChannelCategory> getChannelCategories() {
-        // TODO This can be improved
-        Collection<ChannelCategory> channels = new ArrayList<>();
-        getServers().forEach(server -> channels.addAll(server.getChannelCategories()));
-        return Collections.unmodifiableCollection(channels);
-    }
+    Collection<ChannelCategory> getChannelCategories();
 
     /**
      * Gets a collection with all server text channels of the bot.
      *
      * @return A collection with all server text channels of the bot.
      */
-    default Collection<ServerTextChannel> getServerTextChannels() {
-        // TODO This can be improved
-        Collection<ServerTextChannel> channels = new ArrayList<>();
-        getServers().forEach(server -> channels.addAll(server.getTextChannels()));
-        return Collections.unmodifiableCollection(channels);
-    }
+    Collection<ServerTextChannel> getServerTextChannels();
 
     /**
      * Gets a collection with all server voice channels of the bot.
      *
      * @return A collection with all server voice channels of the bot.
      */
-    default Collection<ServerVoiceChannel> getServerVoiceChannels() {
-        // TODO This can be improved
-        Collection<ServerVoiceChannel> channels = new ArrayList<>();
-        getServers().forEach(server -> channels.addAll(server.getVoiceChannels()));
-        return Collections.unmodifiableCollection(channels);
-    }
+    Collection<ServerVoiceChannel> getServerVoiceChannels();
 
     /**
      * Gets a collection with all text channels of the bot.
      *
      * @return A collection with all text channels of the bot.
      */
-    default Collection<TextChannel> getTextChannels() {
-        // TODO This can be improved
-        return Collections.unmodifiableList(
-                getChannels().stream()
-                        .filter(TextChannel.class::isInstance)
-                        .map(TextChannel.class::cast)
-                        .collect(Collectors.toList()));
-    }
+    Collection<TextChannel> getTextChannels();
 
     /**
      * Gets a collection with all voice channels of the bot.
      *
      * @return A collection with all voice channels of the bot.
      */
-    default Collection<VoiceChannel> getVoiceChannels() {
-        // TODO This can be improved
-        return Collections.unmodifiableList(
-                getChannels().stream()
-                        .filter(VoiceChannel.class::isInstance)
-                        .map(VoiceChannel.class::cast)
-                        .collect(Collectors.toList()));
-    }
+    Collection<VoiceChannel> getVoiceChannels();
 
     /**
      * Gets a channel by its id.

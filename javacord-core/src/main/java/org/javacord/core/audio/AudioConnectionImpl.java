@@ -4,22 +4,22 @@ import org.apache.logging.log4j.Logger;
 import org.javacord.api.DiscordApi;
 import org.javacord.api.audio.AudioConnection;
 import org.javacord.api.audio.AudioSource;
+import org.javacord.api.audio.SpeakingFlag;
 import org.javacord.api.entity.channel.ServerVoiceChannel;
 import org.javacord.core.DiscordApiImpl;
 import org.javacord.core.entity.server.ServerImpl;
 import org.javacord.core.listener.audio.InternalAudioConnectionAttachableListenerManager;
+import org.javacord.core.util.concurrent.BlockingReference;
 import org.javacord.core.util.gateway.AudioWebSocketAdapter;
 import org.javacord.core.util.logging.LoggerUtil;
 
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Optional;
-import java.util.concurrent.BlockingQueue;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 
 public class AudioConnectionImpl implements AudioConnection, InternalAudioConnectionAttachableListenerManager {
 
@@ -44,11 +44,6 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     private volatile ServerVoiceChannel channel;
 
     /**
-     * A lock to ensure we don't accidentally poll two elements from the queue.
-     */
-    private final ReentrantLock currentSourceLock = new ReentrantLock();
-
-    /**
      * A future that finishes once the connection is fully established.
      */
     private final CompletableFuture<AudioConnection> readyFuture;
@@ -64,14 +59,9 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     private CompletableFuture<Void> disconnectFuture;
 
     /**
-     * The source that gets played at the moment.
+     * The source that is currently being played.
      */
-    private volatile AtomicReference<AudioSource> currentSource = new AtomicReference<>();
-
-    /**
-     * A queue with all audio sources for this connection.
-     */
-    private final BlockingQueue<AudioSource> queue = new LinkedBlockingQueue<>();
+    private final BlockingReference<AudioSource> currentSource = new BlockingReference<>();
 
     /**
      * An artificial id for the connection.
@@ -104,6 +94,11 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     private volatile String endpoint;
 
     /**
+     * The current set of active speaking flags.
+     */
+    private volatile EnumSet<SpeakingFlag> speakingFlags = EnumSet.noneOf(SpeakingFlag.class);
+
+    /**
      * Whether the bot is muted or not.
      */
     private volatile boolean muted;
@@ -125,7 +120,7 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
         id = idCounter.getAndIncrement();
         api = (DiscordApiImpl) channel.getApi();
         api.getWebSocketAdapter()
-                .sendVoiceStateUpdate(channel.getServer(), channel, false, false);
+                .sendVoiceStateUpdate(channel.getServer(), getChannel(), false, false);
     }
 
     /**
@@ -215,7 +210,58 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
      * @param speaking The speaking mode to set
      */
     public void setSpeaking(boolean speaking) {
-        websocketAdapter.sendSpeaking(speaking);
+        EnumSet<SpeakingFlag> newSpeakingFlags = speakingFlags.clone();
+        if (speaking) {
+            newSpeakingFlags.add(SpeakingFlag.SPEAKING);
+        } else {
+            newSpeakingFlags.remove(SpeakingFlag.SPEAKING);
+        }
+        setSpeakingFlags(newSpeakingFlags);
+    }
+
+    /**
+     * Gets whether the connection is currently speaking with priority.
+     *
+     * @return Whether the connection is currently speaking with priority.
+     */
+    public boolean isPrioritySpeaking() {
+        return speakingFlags.contains(SpeakingFlag.PRIORITY_SPEAKER);
+    }
+
+    /**
+     * Sets whether the connection is priority speaking.
+     *
+     * @param prioritySpeaking Whether or not to speak with priority.
+     */
+    public void setPrioritySpeaking(boolean prioritySpeaking) {
+        EnumSet<SpeakingFlag> newSpeakingFlags = speakingFlags.clone();
+        if (prioritySpeaking) {
+            newSpeakingFlags.add(SpeakingFlag.PRIORITY_SPEAKER);
+        } else {
+            newSpeakingFlags.remove(SpeakingFlag.PRIORITY_SPEAKER);
+        }
+        setSpeakingFlags(newSpeakingFlags);
+    }
+
+    /**
+     * Gets the current set of active speaking flags.
+     *
+     * @return The current set of active speaking flags.
+     */
+    public Set<SpeakingFlag> getSpeakingFlags() {
+        return Collections.unmodifiableSet(speakingFlags);
+    }
+
+    /**M
+     * Sets the current speaking flags and sends a speaking packet if they have changed.
+     *
+     * @param speakingFlags The new speaking flags to set.
+     */
+    public void setSpeakingFlags(EnumSet<SpeakingFlag> speakingFlags) {
+        if (!speakingFlags.equals(this.speakingFlags)) {
+            this.speakingFlags = speakingFlags;
+            websocketAdapter.sendSpeaking();
+        }
     }
 
     /**
@@ -232,9 +278,33 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
             return false;
         }
         connectingOrConnected = true;
-        logger.debug("Received all information required to connect to voice channel {}", channel);
+        logger.debug("Received all information required to connect to voice channel {}", getChannel());
         websocketAdapter = new AudioWebSocketAdapter(this);
+        channel = channel.getCurrentCachedInstance().orElse(channel);
         return true;
+    }
+
+    /**
+     * Performs a full reconnect of the audio connection by sending a new voice state update.
+     */
+    public void reconnect() {
+        websocketAdapter = null;
+        sessionId = null;
+        token = null;
+        endpoint = null;
+        connectingOrConnected = false;
+        api.getWebSocketAdapter()
+                .sendVoiceStateUpdate(getChannel().getServer(), getChannel(), isSelfMuted(), isSelfDeafened());
+    }
+
+    /**
+     * Gets the current audio source, blocking the thread until it is available.
+     *
+     * @return The current audio source.
+     * @throws InterruptedException If interrupted while waiting.
+     */
+    public AudioSource getCurrentAudioSourceBlocking() throws InterruptedException {
+        return currentSource.get();
     }
 
     /**
@@ -242,43 +312,12 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
      * if necessary for an audio source to become available.
      *
      * @param timeout How long to wait before giving up.
-     * @param unit A {@code TimeUnit} determining how to interpret the {@code timeout} parameter.
+     * @param unit    A {@code TimeUnit} determining how to interpret the {@code timeout} parameter.
      * @return The current audio source, or {@code null} if the specified waiting time elapsed.
      * @throws InterruptedException If interrupted while waiting.
      */
     public AudioSource getCurrentAudioSourceBlocking(long timeout, TimeUnit unit) throws InterruptedException {
-        AudioSource source;
-        currentSourceLock.lock();
-        try {
-            AtomicBoolean poll = new AtomicBoolean(false);
-            source = currentSource.updateAndGet(currentSource -> {
-                if (currentSource == null) {
-                    // Always poll if the current source is null
-                    poll.set(true);
-                } else {
-                    // If the current source is not null, only poll if it's still queued
-                    poll.set(queue.peek() == currentSource);
-                }
-                return currentSource;
-            });
-            if (poll.get()) {
-                AudioSource sourceToSet = queue.poll(timeout, unit);
-                if (sourceToSet != null) { // If it's null, it timed out
-                    currentSource.set(sourceToSet);
-                    source = sourceToSet;
-                }
-            }
-        } finally {
-            currentSourceLock.unlock();
-        }
-        return source;
-    }
-
-    /**
-     * Removes the current audio source.
-     */
-    public void removeCurrentSource() {
-        currentSource.set(null);
+        return currentSource.get(timeout, unit);
     }
 
     @Override
@@ -292,21 +331,6 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     }
 
     @Override
-    public void queue(AudioSource source) {
-        queue.add(source);
-    }
-
-    @Override
-    public boolean dequeue(AudioSource source) {
-        if (currentSource.get() == source) {
-            removeCurrentSource();
-            return true;
-        } else {
-            return queue.remove(source);
-        }
-    }
-
-    @Override
     public CompletableFuture<Void> moveTo(ServerVoiceChannel destChannel) {
         return moveTo(destChannel, muted, deafened);
     }
@@ -314,17 +338,17 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     @Override
     public CompletableFuture<Void> moveTo(ServerVoiceChannel destChannel, boolean selfMute, boolean selfDeafen) {
         movingFuture = new CompletableFuture<>();
-        if (!destChannel.getServer().equals(channel.getServer())) {
+        if (!destChannel.getServer().equals(getChannel().getServer())) {
             movingFuture.completeExceptionally(
                     new IllegalArgumentException("Cannot move to a voice channel not in the same server!"));
             return movingFuture;
         }
-        if (destChannel.equals(channel)) {
+        if (destChannel.equals(getChannel())) {
             movingFuture.complete(null);
             return movingFuture;
         }
         api.getWebSocketAdapter()
-                .sendVoiceStateUpdate(channel.getServer(), destChannel, selfMute, selfDeafen);
+                .sendVoiceStateUpdate(getChannel().getServer(), destChannel, selfMute, selfDeafen);
         return movingFuture.thenRun(() -> setChannel(destChannel));
     }
 
@@ -333,25 +357,33 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
         disconnectFuture = new CompletableFuture<>();
         websocketAdapter.disconnect();
         api.getWebSocketAdapter()
-                .sendVoiceStateUpdate(channel.getServer(), null, muted, deafened);
-        ((ServerImpl) channel.getServer()).removeAudioConnection(this);
+                .sendVoiceStateUpdate(getChannel().getServer(), null, muted, deafened);
+        ((ServerImpl) getChannel().getServer()).removeAudioConnection(this);
         return disconnectFuture;
     }
 
     @Override
-    public Optional<AudioSource> getCurrentAudioSource() {
-        return Optional.ofNullable(
-                currentSource.updateAndGet(source -> {
-                    if (source != null) {
-                        return source;
-                    }
-                    return queue.peek();
-                }));
+    public Optional<AudioSource> getAudioSource() {
+        try {
+            return Optional.ofNullable(currentSource.get(0, TimeUnit.MILLISECONDS));
+        } catch (InterruptedException e) {
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public void setAudioSource(AudioSource source) {
+        currentSource.set(source);
+    }
+
+    @Override
+    public void removeAudioSource() {
+        currentSource.set(null);
     }
 
     @Override
     public ServerVoiceChannel getChannel() {
-        return channel;
+        return channel.getCurrentCachedInstance().orElse(channel);
     }
 
     @Override
@@ -363,7 +395,7 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     public void setSelfMuted(boolean muted) {
         this.muted = muted;
         api.getWebSocketAdapter()
-                .sendVoiceStateUpdate(channel.getServer(), channel, muted, deafened);
+                .sendVoiceStateUpdate(getChannel().getServer(), getChannel(), muted, deafened);
     }
 
     @Override
@@ -375,12 +407,12 @@ public class AudioConnectionImpl implements AudioConnection, InternalAudioConnec
     public void setSelfDeafened(boolean deafened) {
         this.deafened = deafened;
         api.getWebSocketAdapter()
-                .sendVoiceStateUpdate(channel.getServer(), channel, muted, deafened);
+                .sendVoiceStateUpdate(getChannel().getServer(), getChannel(), muted, deafened);
     }
 
     @Override
     public String toString() {
-        return String
-                .format("AudioConnection (channel: %#s, sessionId: %s, endpoint: %s)", channel, sessionId, endpoint);
+        return String.format(
+                "AudioConnection (channel: %#s, sessionId: %s, endpoint: %s)", getChannel(), sessionId, endpoint);
     }
 }

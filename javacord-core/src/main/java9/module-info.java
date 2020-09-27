@@ -6,6 +6,7 @@ module org.javacord.core {
     requires transitive okhttp3;
     requires transitive nv.websocket.client;
     requires transitive org.apache.logging.log4j;
+    requires transitive io.vavr;
 
     requires transitive java.desktop;
 

@@ -4,21 +4,23 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.javacord.api.DiscordApi;
 import org.javacord.api.entity.channel.GroupChannel;
 import org.javacord.api.entity.channel.PrivateChannel;
-import org.javacord.api.entity.channel.ServerChannel;
 import org.javacord.api.entity.channel.ServerVoiceChannel;
 import org.javacord.api.entity.server.Server;
 import org.javacord.api.event.channel.server.voice.ServerVoiceChannelMemberJoinEvent;
 import org.javacord.api.event.channel.server.voice.ServerVoiceChannelMemberLeaveEvent;
+import org.javacord.api.event.server.VoiceStateUpdateEvent;
 import org.javacord.api.event.user.UserChangeDeafenedEvent;
 import org.javacord.api.event.user.UserChangeMutedEvent;
 import org.javacord.api.event.user.UserChangeSelfDeafenedEvent;
 import org.javacord.api.event.user.UserChangeSelfMutedEvent;
+import org.javacord.core.audio.AudioConnectionImpl;
 import org.javacord.core.entity.channel.GroupChannelImpl;
 import org.javacord.core.entity.channel.PrivateChannelImpl;
 import org.javacord.core.entity.channel.ServerVoiceChannelImpl;
 import org.javacord.core.entity.server.ServerImpl;
 import org.javacord.core.event.channel.server.voice.ServerVoiceChannelMemberJoinEventImpl;
 import org.javacord.core.event.channel.server.voice.ServerVoiceChannelMemberLeaveEventImpl;
+import org.javacord.core.event.server.VoiceStateUpdateEventImpl;
 import org.javacord.core.event.user.UserChangeDeafenedEventImpl;
 import org.javacord.core.event.user.UserChangeMutedEventImpl;
 import org.javacord.core.event.user.UserChangeSelfDeafenedEventImpl;
@@ -71,14 +73,22 @@ public class VoiceStateUpdateHandler extends PacketHandler {
         // We need the session id to connect to an audio websocket
         String sessionId = packet.get("session_id").asText();
         long channelId = packet.get("channel_id").asLong();
-        api.getServerVoiceChannelById(channelId)
-                .map(ServerChannel::getServer)
-                .map(ServerImpl.class::cast)
-                .flatMap(ServerImpl::getPendingAudioConnection)
-                .ifPresent(connection -> {
-                    connection.setSessionId(sessionId);
-                    connection.tryConnect();
-                });
+        api.getServerVoiceChannelById(channelId).ifPresent(channel -> {
+            dispatchVoiceStateUpdateEvent(
+                    channel, channel.getServer(), packet.get("session_id").asText());
+
+            AudioConnectionImpl pendingAudioConnection =
+                    api.getPendingAudioConnectionByServerId(channel.getServer().getId());
+            if (pendingAudioConnection != null) {
+                pendingAudioConnection.setSessionId(sessionId);
+                pendingAudioConnection.tryConnect();
+            }
+
+            channel.getServer().getAudioConnection().ifPresent(connection -> {
+                ((AudioConnectionImpl) connection).setSessionId(sessionId);
+                ((AudioConnectionImpl) connection).tryConnect();
+            });
+        });
     }
 
     private void handleServerVoiceChannel(JsonNode packet, long userId) {
@@ -148,6 +158,12 @@ public class VoiceStateUpdateHandler extends PacketHandler {
     private void handleGroupChannel(long userId, GroupChannelImpl channel) {
         //channel.addConnectedUser(user);
         //dispatchVoiceChannelMemberJoinEvent(user, channel);
+    }
+
+    private void dispatchVoiceStateUpdateEvent(ServerVoiceChannel newChannel, Server server, String sessionId) {
+        VoiceStateUpdateEvent event = new VoiceStateUpdateEventImpl(newChannel, sessionId);
+
+        api.getEventDispatcher().dispatchVoiceStateUpdateEvent((DispatchQueueSelector) server, newChannel, event);
     }
 
     private void dispatchServerVoiceChannelMemberJoinEvent(

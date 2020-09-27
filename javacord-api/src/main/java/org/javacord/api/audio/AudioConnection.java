@@ -5,58 +5,10 @@ import org.javacord.api.entity.server.Server;
 import org.javacord.api.listener.audio.AudioConnectionAttachableListenerManager;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 public interface AudioConnection extends AudioConnectionAttachableListenerManager {
-
-    /**
-     * Queues the audio source.
-     *
-     * @param source The audio source to queue.
-     */
-    void queue(AudioSource source);
-
-    /**
-     * Queues the given audio sources.
-     *
-     * @param sources The audio sources to queue.
-     */
-    default void queue(AudioSource... sources) {
-        for (AudioSource source : sources) {
-            queue(source);
-        }
-    }
-
-    /**
-     * Dequeues the given audio source.
-     *
-     * @param source The audio source to dequeue if present.
-     * @return If this queue changed as a result of the call.
-     */
-    boolean dequeue(AudioSource source);
-
-    /**
-     * Dequeues the given audio sources.
-     *
-     * @param sources The audio sources to dequeue if present.
-     * @return If this queue changed as a result of the call.
-     */
-    default boolean dequeue(AudioSource... sources) {
-        boolean changed = false;
-        for (AudioSource source : sources) {
-            changed = changed || dequeue(source);
-        }
-        return changed;
-    }
-
-    /**
-     * Dequeues the current audio source if present.
-     *
-     * @return If this queue changed as a result of the call.
-     */
-    default boolean dequeueCurrentSource() {
-        return getCurrentAudioSource().map(this::dequeue).orElse(false);
-    }
 
     /**
      * Moves the connection to a different channel.
@@ -88,11 +40,23 @@ public interface AudioConnection extends AudioConnectionAttachableListenerManage
     CompletableFuture<Void> close();
 
     /**
-     * Gets the current audio source.
+     * Gets the audio source.
      *
-     * @return The current audio source.
+     * @return The audio source.
      */
-    Optional<AudioSource> getCurrentAudioSource();
+    Optional<AudioSource> getAudioSource();
+
+    /**
+     * Sets the audio source, replacing any currently playing source.
+     *
+     * @param source The audio source which will become the source.
+     */
+    void setAudioSource(AudioSource source);
+
+    /**
+     * Removes the audio source.
+     */
+    void removeAudioSource();
 
     /**
      * Gets the voice channel of the audio connection.
@@ -136,6 +100,27 @@ public interface AudioConnection extends AudioConnectionAttachableListenerManage
      * @param deafened Whether or not to self-deafen this connection.
      */
     void setSelfDeafened(boolean deafened);
+
+    /**
+     * Gets the priority speaker status of this connection.
+     *
+     * @return Whether or not the connection is priority speaking.
+     */
+    boolean isPrioritySpeaking();
+
+    /**
+     * Sets the priority speaker status of this connection.
+     *
+     * @param prioritySpeaking Whether or not to become a priority speaker.
+     */
+    void setPrioritySpeaking(boolean prioritySpeaking);
+
+    /**
+     * Gets the speaking flags of this connection.
+     *
+     * @return The current speaking flags of this connection.
+     */
+    Set<SpeakingFlag> getSpeakingFlags();
 
     /**
      * Gets the server of the audio connection.

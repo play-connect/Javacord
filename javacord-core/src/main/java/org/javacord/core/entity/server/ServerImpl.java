@@ -187,19 +187,6 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     private final ReentrantLock audioConnectionLock = new ReentrantLock();
 
     /**
-     * The current audio connection of the server.
-     */
-    private volatile AudioConnectionImpl audioConnection;
-
-    /**
-     * A pending audio connection.
-     * A pending connection is a connect that is currently trying to connect to a websocket and establish an udp
-     * connection but has not finished.
-     * The field might still be set, even though the connection is no longer pending!
-     */
-    private volatile AudioConnectionImpl pendingAudioConnection;
-
-    /**
      * A list with all consumers who will be informed when the server is ready.
      */
     private final List<Consumer<Server>> readyConsumers = new ArrayList<>();
@@ -208,11 +195,6 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      * A map with all roles of the server.
      */
     private final ConcurrentHashMap<Long, Role> roles = new ConcurrentHashMap<>();
-
-    /**
-     * A map with all channels of the server.
-     */
-    private final ConcurrentHashMap<Long, ServerChannel> channels = new ConcurrentHashMap<>();
 
     /**
      * A map with all members of the server.
@@ -451,7 +433,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
                 if (presenceJson.has("game")) {
                     Activity activity = null;
                     if (!presenceJson.get("game").isNull()) {
-                        activity = new ActivityImpl(presenceJson.get("game"));
+                        activity = new ActivityImpl(api, presenceJson.get("game"));
                     }
                     user.setActivity(activity);
                 }
@@ -652,32 +634,6 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      */
     public void setMultiFactorAuthenticationLevel(MultiFactorAuthenticationLevel multiFactorAuthenticationLevel) {
         this.multiFactorAuthenticationLevel = multiFactorAuthenticationLevel;
-    }
-
-    /**
-     * Adds a channel to the cache.
-     *
-     * @param channel The channel to add.
-     */
-    public void addChannelToCache(ServerChannel channel) {
-        ServerChannel oldChannel = channels.put(channel.getId(), channel);
-        if ((oldChannel instanceof Cleanupable) && (oldChannel != channel)) {
-            ((Cleanupable) oldChannel).cleanup();
-        }
-    }
-
-    /**
-     * Removes a channel from the cache.
-     *
-     * @param channelId The id of the channel to remove.
-     */
-    public void removeChannelFromCache(long channelId) {
-        channels.computeIfPresent(channelId, (key, channel) -> {
-            if (channel instanceof Cleanupable) {
-                ((Cleanupable) channel).cleanup();
-            }
-            return null;
-        });
     }
 
     /**
@@ -1027,7 +983,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
      * @return An unordered collection with all channels in the server.
      */
     public Collection<ServerChannel> getUnorderedChannels() {
-        return channels.values();
+        return api.getEntityCache().get().getChannelCache().getChannelsOfServer(getId());
     }
 
     /**
@@ -1038,7 +994,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public void setAudioConnection(AudioConnectionImpl audioConnection) {
         audioConnectionLock.lock();
         try {
-            this.audioConnection = audioConnection;
+            api.setAudioConnection(getId(), audioConnection);
         } finally {
             audioConnectionLock.unlock();
         }
@@ -1055,7 +1011,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public void setPendingAudioConnection(AudioConnectionImpl audioConnection) {
         audioConnectionLock.lock();
         try {
-            pendingAudioConnection = audioConnection;
+            api.setPendingAudioConnection(getId(), audioConnection);
         } finally {
             audioConnectionLock.unlock();
         }
@@ -1069,24 +1025,15 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
     public void removeAudioConnection(AudioConnection audioConnection) {
         audioConnectionLock.lock();
         try {
-            if (pendingAudioConnection == audioConnection) {
-                pendingAudioConnection = null;
+            if (api.getPendingAudioConnectionByServerId(getId()) == audioConnection) {
+                api.removePendingAudioConnection(getId());
             }
-            if (this.audioConnection == audioConnection) {
-                this.audioConnection = null;
+            if (api.getAudioConnectionByServerId(getId()) == audioConnection) {
+                api.removeAudioConnection(getId());
             }
         } finally {
             audioConnectionLock.unlock();
         }
-    }
-
-    /**
-     * Gets the pending audio connection of the server.
-     *
-     * @return The pending audio connection of the server.
-     */
-    public Optional<AudioConnectionImpl> getPendingAudioConnection() {
-        return Optional.ofNullable(pendingAudioConnection);
     }
 
     @Override
@@ -1106,7 +1053,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
 
     @Override
     public Optional<AudioConnection> getAudioConnection() {
-        return Optional.ofNullable(audioConnection);
+        return Optional.ofNullable(api.getAudioConnectionByServerId(getId()));
     }
 
     @Override
@@ -1543,7 +1490,7 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
 
     @Override
     public List<ServerChannel> getChannels() {
-        List<ServerChannel> channels = this.channels.values().stream()
+        List<ServerChannel> channels = getUnorderedChannels().stream()
                 .filter(channel -> channel.asCategorizable()
                         .map(categorizable -> !categorizable.getCategory().isPresent())
                         .orElse(false))
@@ -1587,18 +1534,16 @@ public class ServerImpl implements Server, Cleanupable, InternalServerAttachable
 
     @Override
     public Optional<ServerChannel> getChannelById(long id) {
-        return Optional.ofNullable(channels.get(id));
+        return api.getEntityCache().get().getChannelCache().getChannelById(id)
+                .filter(ServerChannel.class::isInstance)
+                .map(ServerChannel.class::cast);
     }
 
     @Override
     public void cleanup() {
-        channels.values().stream()
+        getUnorderedChannels().stream()
                 .map(ServerChannel::getId)
                 .forEach(api::removeChannelFromCache);
-        channels.values().stream()
-                .filter(Cleanupable.class::isInstance)
-                .map(Cleanupable.class::cast)
-                .forEach(Cleanupable::cleanup);
     }
 
     @Override
