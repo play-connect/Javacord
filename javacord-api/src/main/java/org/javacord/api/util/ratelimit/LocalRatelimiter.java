@@ -19,13 +19,13 @@ import java.time.Duration;
  * For the 50 requests / 1 second ratelimit, these rules allow the following ratelimits (only a subset):
  * <ul>
  * <li>About {@code 1} request per {@code 20.5 ms}
- *     ({@code amount = 1} and {@code bucketDuration = Duration.ofMillis((long) Math.ceil(1D / 49D))})
+ *     ({@code amount = 1} and {@code bucketDuration = Duration.ofNanos((long) Math.ceil(1D / 49D))})
  * <li>About {@code 5} request per {@code 111.1 ms}
- *     ({@code amount = 5} and {@code bucketDuration = Duration.ofMillis((long) Math.ceil(5D / 45D))}).
+ *     ({@code amount = 5} and {@code bucketDuration = Duration.ofNanos((long) Math.ceil(5D / 45D))}).
  * <li>{@code 10} request per {@code 250 ms}
- *     ({@code amount = 10} and {@code bucketDuration = Duration.ofMillis((long) Math.ceil(10D / 40D))}).
+ *     ({@code amount = 10} and {@code bucketDuration = Duration.ofNanos((long) Math.ceil(10D / 40D))}).
  * <li>{@code 25} request per {@code 1 sec}
- *     ({@code amount = 25} and {@code bucketDuration = Duration.ofMillis((long) Math.ceil(10D / 40D))}).
+ *     ({@code amount = 25} and {@code bucketDuration = Duration.ofNanos((long) Math.ceil(10D / 40D))}).
  * </ul>
  * Choosing a lower {@code amount} increases the maximum throughput but can limits your ability to perform actions
  * in bulk.
@@ -35,7 +35,7 @@ import java.time.Duration;
  */
 public class LocalRatelimiter implements Ratelimiter {
 
-    private volatile long nextResetMillis;
+    private volatile long nextResetNanos;
     private volatile int remainingQuota;
 
     private final int amount;
@@ -101,8 +101,8 @@ public class LocalRatelimiter implements Ratelimiter {
      *
      * @return The next time the quota resets. Can be in the past.
      */
-    public long getNextResetMillis() {
-        return nextResetMillis;
+    public long getNextResetNanos() {
+        return nextResetNanos;
     }
 
     /**
@@ -125,7 +125,7 @@ public class LocalRatelimiter implements Ratelimiter {
         }
 
         // Reset the limit when the last reset timestamp is past
-        if (System.currentTimeMillis() > nextResetMillis) {
+        if (System.nanoTime() > nextResetNanos) {
             remainingQuota = amount;
             try {
                 nextResetNanos = System.nanoTime() + bucketDuration.toNanos();
