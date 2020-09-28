@@ -454,7 +454,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
             websocket.addListener(this);
             websocket.addListener(new WebSocketLogger());
 
-            api.getGatewayIdentifyRatelimiter().requestQuota();
+            api.getGatewayIdentifyRatelimiter().requestQuota(null);
             websocket.connect();
         } catch (Throwable t) {
             logger.warn("An error occurred while connecting to websocket", t);
@@ -640,7 +640,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                         return;
                     }
                 }
-                api.getGatewayIdentifyRatelimiter().requestQuota();
+                api.getGatewayIdentifyRatelimiter().requestQuota(null);
                 sendIdentify(websocket);
                 break;
             case HELLO:
