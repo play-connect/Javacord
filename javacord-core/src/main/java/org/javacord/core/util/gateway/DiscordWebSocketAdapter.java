@@ -30,7 +30,6 @@ import org.javacord.core.event.connection.ReconnectEventImpl;
 import org.javacord.core.event.connection.ResumeEventImpl;
 import org.javacord.core.util.auth.NvWebSocketResponseImpl;
 import org.javacord.core.util.auth.NvWebSocketRouteImpl;
-import org.javacord.core.util.concurrent.ThreadFactory;
 import org.javacord.core.util.handler.ReadyHandler;
 import org.javacord.core.util.handler.ResumedHandler;
 import org.javacord.core.util.handler.channel.ChannelCreateHandler;
@@ -87,13 +86,9 @@ import java.util.Optional;
 import java.util.WeakHashMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicMarkableReference;
@@ -159,30 +154,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
     private BlockingQueue<WebSocketFrameSendingQueueEntry> webSocketFrameSendingQueue = new PriorityBlockingQueue<>();
     private AtomicReference<Thread> webSocketFrameSenderThread = new AtomicReference<>();
     private AtomicInteger webSocketFrameSendingLimit = new AtomicInteger(WEB_SOCKET_FRAME_SENDING_RATELIMIT);
-
-    private static final Map<String, Long> lastIdentificationPerAccount = Collections.synchronizedMap(new HashMap<>());
-    private static final ConcurrentMap<String, Semaphore> connectionDelaySemaphorePerAccount =
-            new ConcurrentHashMap<>();
-
-    static {
-        // This scheduler makes sure that the semaphores get released after a while if it failed in the listener
-        // for whatever reason. It's just a fail-safe.
-        Executors.newSingleThreadScheduledExecutor(
-                new ThreadFactory("Javacord - Connection Delay Semaphores Starvation Protector", true)
-        ).scheduleWithFixedDelay(() -> {
-            try {
-                connectionDelaySemaphorePerAccount.forEach((token, semaphore) -> {
-                    if ((semaphore.availablePermits() == 0)
-                            && (System.currentTimeMillis() - lastIdentificationPerAccount.getOrDefault(token, 0L)
-                            >= 15000)) {
-                        semaphore.release();
-                    }
-                });
-            } catch (Throwable t) {
-                logger.error("Failed to do the backup semaphore releasing!", t);
-            }
-        }, 10, 10, TimeUnit.SECONDS);
-    }
 
     /**
      * Creates a new discord websocket adapter.
@@ -482,7 +453,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
             websocket.addHeader("Accept-Encoding", "gzip");
             websocket.addListener(this);
             websocket.addListener(new WebSocketLogger());
-            waitForIdentifyRateLimit();
             websocket.connect();
         } catch (Throwable t) {
             logger.warn("An error occurred while connecting to websocket", t);
@@ -506,24 +476,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                             this.connect();
                         }, api.getReconnectDelay(reconnectAttempt.get()), TimeUnit.SECONDS);
             }
-        }
-    }
-
-    /**
-     * Identification is rate limited to once every 5 seconds,
-     * so don't try to more often per account, even in different instances.
-     * This method waits for the identification rate limit to be over, then returns.
-     */
-    private void waitForIdentifyRateLimit() {
-        String token = api.getPrefixedToken();
-        connectionDelaySemaphorePerAccount.computeIfAbsent(token, key -> new Semaphore(1)).acquireUninterruptibly();
-        for (long delay = 5100 - (System.currentTimeMillis() - lastIdentificationPerAccount.getOrDefault(token, 0L));
-                delay > 0;
-                delay = 5100 - (System.currentTimeMillis() - lastIdentificationPerAccount.getOrDefault(token, 0L))) {
-            logger.debug("Delaying connecting by {}ms", delay);
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException ignored) { }
         }
     }
 
@@ -671,7 +623,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                                WebSocketCloseReason.COMMANDED_RECONNECT.getCloseReason());
                 break;
             case INVALID_SESSION:
-                long fakeLastIdentificationTime = System.currentTimeMillis();
                 if (lastSentFrameWasIdentify.isMarked()) {
                     logger.info("Hit identifying rate limit. Retrying in 5 seconds...");
                 } else {
@@ -680,10 +631,13 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                     logger.info("Could not resume session. Reconnecting in {}.{} seconds...",
                             () -> 1 + zeroToFourSeconds / 1000,
                             () -> 1 + zeroToFourSeconds / 100 % 10);
-                    fakeLastIdentificationTime -= 4000 - zeroToFourSeconds;
+                    try {
+                        Thread.sleep(zeroToFourSeconds);
+                    } catch (InterruptedException e) {
+                        logger.error("Interrupted while delaying reconnect!");
+                        return;
+                    }
                 }
-                lastIdentificationPerAccount.put(api.getPrefixedToken(), fakeLastIdentificationTime);
-                waitForIdentifyRateLimit();
                 sendIdentify(websocket);
                 break;
             case HELLO:
@@ -699,7 +653,6 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                 if (sessionId == null) {
                     sendIdentify(websocket);
                 } else {
-                    connectionDelaySemaphorePerAccount.get(api.getPrefixedToken()).release();
                     sendResume(websocket);
                 }
                 break;
@@ -746,7 +699,7 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
      *
      * @param websocket The websocket the identify packet should be sent to.
      */
-    private void sendIdentify(WebSocket websocket) {
+    private void sendIdentify(WebSocket websocket) throws InterruptedException {
         ObjectNode identifyPacket = JsonNodeFactory.instance.objectNode()
                 .put("op", GatewayOpcode.IDENTIFY.getCode());
         ObjectNode data = identifyPacket.putObject("d");
@@ -782,16 +735,14 @@ public class DiscordWebSocketAdapter extends WebSocketAdapter {
                     }
                 } else {
                     // identify frame is actually sent => set the mark
-                    if (lastSentFrameWasIdentify.compareAndSet(frame, null, false, true)) {
-                        lastIdentificationPerAccount.put(token, System.currentTimeMillis());
-                        connectionDelaySemaphorePerAccount.get(token).release();
-                    }
+                    lastSentFrameWasIdentify.compareAndSet(frame, null, false, true);
                 }
             }
         };
         identifyFrameListeners.add(identifyFrameListener);
         websocket.addListener(identifyFrameListener);
         logger.debug("Sending identify packet");
+        api.getGatewayIdentifyRatelimiter().requestQuota();
         sendLifecycleFrame(websocket, identifyFrame);
     }
 
